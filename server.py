@@ -47,7 +47,6 @@ YAHOO_MAP = {
 }
 BINANCE_MAP = {"BTCUSD_otc":"BTCUSDT","ETHUSD_otc":"ETHUSDT"}
 
-OTC_PAIRS = [
     {"id":"EURUSD_otc","name":"EUR/USD OTC","category":"Forex","base_price":1.08500,"payout":80},
     {"id":"GBPUSD_otc","name":"GBP/USD OTC","category":"Forex","base_price":1.26500,"payout":38},
     {"id":"USDJPY_otc","name":"USD/JPY OTC","category":"Forex","base_price":149.500,"payout":93},
@@ -75,12 +74,6 @@ OTC_PAIRS = [
     {"id":"UKOIL_otc","name":"UK Brent OTC","category":"Commodity","base_price":85.500,"payout":93},
     {"id":"USOIL_otc","name":"US Crude OTC","category":"Commodity","base_price":80.500,"payout":84},
     {"id":"BTCUSD_otc","name":"Bitcoin OTC","category":"Crypto","base_price":65000.00,"payout":80},
-      {"id":"EURNZD_otc","name":"EUR/NZD OTC","category":"Forex","base_price":1.77000,"payout":84},
-      {"id":"GBPNZD_otc","name":"GBP/NZD OTC","category":"Forex","base_price":2.11000,"payout":84},
-      {"id":"AUDNZD_otc","name":"AUD/NZD OTC","category":"Forex","base_price":1.09000,"payout":84},
-    {"id":"ETHUSD_otc","name":"Ethereum OTC","category":"Crypto","base_price":3500.00,"payout":66},
-]
-
 class SignalEngine:
     def __init__(self, pid):
         self.pair_id=pid
