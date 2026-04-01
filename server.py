@@ -74,6 +74,8 @@ OTC_PAIRS = [
     {"id":"UKOIL_otc","name":"UK Brent OTC","category":"Commodity","base_price":85.500,"payout":93},
     {"id":"USOIL_otc","name":"US Crude OTC","category":"Commodity","base_price":80.500,"payout":84},
     {"id":"BTCUSD_otc","name":"Bitcoin OTC","category":"Crypto","base_price":65000.00,"payout":80},
+  
+    {"id":"ETHUSD_otc","name":"Ethereum OTC","category":"Crypto","base_price":3500.00,"payout":80}]
 class SignalEngine:
     def __init__(self, pid):
         self.pair_id=pid
