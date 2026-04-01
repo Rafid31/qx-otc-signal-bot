@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # ── Try pyquotex ─────────────────────────────────────────────────────────────
 QUOTEX_AVAILABLE = False
 try:
-    from pyquotex.stable_api import Quotex
+    from quotexapi.stable_api import Quotex
     QUOTEX_AVAILABLE = True
     logger.info("✅ pyquotex loaded")
 except Exception:
@@ -361,17 +361,20 @@ async def fetch_candles_quotex(pair_id: str) -> Optional[List[Dict]]:
     if not quotex_client:
         return None
     try:
-        candles = await quotex_client.get_candles(pair_id, 60, 100)
-        if candles:
+        # Get asset name without _otc suffix for some API calls
+        asset = pair_id.upper()
+        status, candles = await quotex_client.get_candles(asset, 60, 100, time.time())
+        if status and candles:
             result = []
             for c in candles:
-                result.append({
-                    "open":  float(c.get("open",  c.get("o", 0))),
-                    "high":  float(c.get("high",  c.get("h", 0))),
-                    "low":   float(c.get("low",   c.get("l", 0))),
-                    "close": float(c.get("close", c.get("c", 0))),
-                })
-            return result
+                if isinstance(c, dict):
+                    result.append({
+                        "open":  float(c.get("open",  c.get("o", 0))),
+                        "high":  float(c.get("max",   c.get("high", c.get("h", 0)))),
+                        "low":   float(c.get("min",   c.get("low",  c.get("l", 0)))),
+                        "close": float(c.get("close", c.get("c", 0))),
+                    })
+            return result if result else None
     except Exception as e:
         logger.warning(f"Failed to fetch candles for {pair_id}: {e}")
     return None
