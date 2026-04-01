@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QX OTC Signal Bot | Professional Trading Signals</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-icon">&#9654;</span>
+        <span class="logo-text">QX <span class="accent">Signal Bot</span></span>
+      </div>
+      <div class="status-bar">
+        <span id="conn-dot" class="dot dot-off"></span>
+        <span id="conn-label">Disconnected</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="server-time">
+        <span class="label">Server Time</span>
+        <span id="server-clock">--:--:--</span>
+      </div>
+      <div class="accuracy-badge">
+        <span class="label">Accuracy</span>
+        <span id="accuracy-pct">--%</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- AUTH PANEL -->
+  <div id="auth-panel" class="card auth-card">
+    <h2 class="card-title">&#128274; Connect to QX Broker</h2>
+    <p class="auth-desc">Enter your QX Broker session token to receive live OTC signals. Your token is used only in your browser and is never stored on any server.</p>
+    <div class="form-group">
+      <label for="token-input">Session Token (SSID)</label>
+      <div class="token-row">
+        <input type="password" id="token-input" placeholder="Paste your QX Broker session token here..." autocomplete="off">
+        <button id="toggle-token" class="btn btn-ghost">Show</button>
+      </div>
+      <p class="hint">How to get your token: Open QX Broker &rarr; DevTools (F12) &rarr; Application &rarr; Local Storage &rarr; Copy <code>token</code> value.</p>
+    </div>
+    <div class="form-group">
+      <label>Timeframe</label>
+      <div class="tf-row">
+        <button class="tf-btn active" data-tf="60">1 Min</button>
+        <button class="tf-btn" data-tf="300">5 Min</button>
+        <button class="tf-btn" data-tf="900">15 Min</button>
+      </div>
+    </div>
+    <button id="connect-btn" class="btn btn-primary">&#9889; Connect &amp; Start Signals</button>
+    <div id="auth-error" class="error-msg hidden"></div>
+  </div>
+
+  <!-- MAIN DASHBOARD -->
+  <div id="dashboard" class="hidden">
+    <div class="dashboard-grid">
+
+      <!-- SIGNAL CARDS -->
+      <section class="signals-section">
+        <div class="section-header">
+          <h2>Live OTC Signals</h2>
+          <div class="legend">
+            <span class="legend-buy">&#9650; BUY</span>
+            <span class="legend-sell">&#9660; SELL</span>
+          </div>
+        </div>
+        <div id="signals-grid" class="signals-grid">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+
+      <!-- SIDE PANEL -->
+      <aside class="side-panel">
+        <!-- STATS -->
+        <div class="card stats-card">
+          <h3>Session Stats</h3>
+          <div class="stat-row">
+            <span>Total Signals</span>
+            <span id="stat-total">0</span>
+          </div>
+          <div class="stat-row">
+            <span>Correct</span>
+            <span id="stat-correct" class="green">0</span>
+          </div>
+          <div class="stat-row">
+            <span>Wrong</span>
+            <span id="stat-wrong" class="red">0</span>
+          </div>
+          <div class="stat-row">
+            <span>Accuracy</span>
+            <span id="stat-accuracy">--%</span>
+          </div>
+          <div class="accuracy-bar-wrap">
+            <div id="accuracy-bar" class="accuracy-bar" style="width:0%"></div>
+          </div>
+        </div>
+
+        <!-- SIGNAL LOG -->
+        <div class="card log-card">
+          <div class="log-header">
+            <h3>Signal Log</h3>
+            <button id="clear-log" class="btn btn-ghost btn-sm">Clear</button>
+          </div>
+          <div id="signal-log" class="signal-log">
+            <div class="log-empty">No signals yet. Connect to start.</div>
+          </div>
+        </div>
+
+        <!-- DISCONNECT -->
+        <button id="disconnect-btn" class="btn btn-danger">&#9744; Disconnect</button>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
