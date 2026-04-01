@@ -389,3 +389,57 @@ table  { border-collapse: collapse; width: 100%; }
   .history-section { padding: 0 var(--space-4) var(--space-8); }
   .stat-pill { display: none; }
 }
+
+/* ── Category tabs ── */
+.tabs-bar {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) var(--space-6);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto; flex-wrap: wrap;
+}
+.tab-btn {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-full);
+  font-size: var(--text-sm); font-weight: 600;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  transition: all var(--transition); white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text); background: var(--surface-2); }
+.tab-btn.active { color: var(--accent); background: var(--accent-dim); border-color: var(--buy-border); }
+.tab-count {
+  font-size: var(--text-xs); font-family: var(--font-mono);
+  background: var(--surface-3); padding: 1px 6px;
+  border-radius: var(--radius-full); color: var(--text-faint);
+}
+.tab-btn.active .tab-count { background: var(--accent-glow); color: var(--accent); }
+.tab-filter { margin-left: auto; display: flex; gap: var(--space-2); }
+.filter-btn {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.05em;
+  color: var(--text-faint); border: 1px solid var(--border);
+  transition: all var(--transition);
+}
+.filter-btn.active, .filter-btn:hover { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+.filter-btn.buy-filter.active  { color: var(--buy);  background: var(--buy-bg);  border-color: var(--buy-border); }
+.filter-btn.sell-filter.active { color: var(--sell); background: var(--sell-bg); border-color: var(--sell-border); }
+
+/* Category badges on cards */
+.cat-badge {
+  font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.06em;
+  padding: 2px 8px; border-radius: var(--radius-full);
+  text-transform: uppercase;
+}
+.cat-Forex     { background: rgba(99,179,237,0.12); color: #63b3ed; }
+.cat-Commodity { background: rgba(237,181,81,0.12);  color: #edb551; }
+.cat-Crypto    { background: rgba(154,117,234,0.12); color: #9a75ea; }
+
+/* Payout badge */
+.payout-badge {
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--text-faint); margin-left: auto;
+}
+.payout-badge span { color: var(--accent); font-weight: 700; }
