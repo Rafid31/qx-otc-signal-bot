@@ -1,0 +1,114 @@
+/* QX OTC Signal Bot - Professional Trading Dashboard */
+:root {
+  --bg-dark: #0B0E13;
+  --bg-card: #151922;
+  --bg-card-hover: #1a1f2e;
+  --border: #2a2f3f;
+  --text-primary: #E8EAED;
+  --text-secondary: #9AA0A6;
+  --text-dim: #5F6368;
+  --accent: #4A90FF;
+  --accent-hover: #3d7ee6;
+  --green: #0FD18A;
+  --red: #FF4757;
+  --yellow: #FFA502;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg-dark); color: var(--text-primary); line-height: 1.6; }
+#app { min-height: 100vh; }
+.hidden { display: none !important; }
+
+/* Header */
+.header { background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 18px 32px; display: flex; justify-content: space-between; align-items: center; }
+.header-left, .header-right { display: flex; align-items: center; gap: 32px; }
+.logo { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; }
+.logo-icon { color: var(--accent); font-size: 24px; }
+.accent { color: var(--accent); }
+.status-bar { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.dot-off { background: var(--text-dim); }
+.dot-on { background: var(--green); animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.server-time, .accuracy-badge { display: flex; flex-direction: column; }
+.label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+#server-clock { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+#accuracy-pct { font-size: 16px; font-weight: 700; color: var(--green); }
+
+/* Card */
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+.card-title { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
+
+/* Auth Panel */
+.auth-card { max-width: 600px; margin: 80px auto; }
+.auth-desc { color: var(--text-secondary); margin-bottom: 24px; }
+.form-group { margin-bottom: 24px; }
+.form-group label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.token-row { display: flex; gap: 12px; }
+.token-row input { flex: 1; }
+input { background: var(--bg-dark); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; color: var(--text-primary); font-size: 14px; width: 100%; }
+input:focus { outline: none; border-color: var(--accent); }
+.hint { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+.hint code { background: var(--bg-dark); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+.tf-row { display: flex; gap: 12px; }
+.tf-btn { flex: 1; padding: 10px; background: var(--bg-dark); border: 1px solid var(--border); border-radius: 8px; color: var(--text-secondary); cursor: pointer; transition: all 0.2s; }
+.tf-btn:hover { background: var(--bg-card-hover); }
+.tf-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.error-msg { background: var(--red); color: white; padding: 12px; border-radius: 8px; margin-top: 16px; font-size: 14px; }
+
+/* Buttons */
+.btn { padding: 12px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.btn-primary { background: var(--accent); color: white; width: 100%; }
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-ghost { background: transparent; color: var(--text-secondary); border: 1px solid var(--border); }
+.btn-ghost:hover { background: var(--bg-card-hover); }
+.btn-danger { background: var(--red); color: white; width: 100%; }
+.btn-danger:hover { opacity: 0.9; }
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+
+/* Dashboard */
+.dashboard-grid { display: grid; grid-template-columns: 1fr 350px; gap: 24px; padding: 32px; }
+.section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.section-header h2 { font-size: 24px; font-weight: 700; }
+.legend { display: flex; gap: 20px; font-size: 13px; }
+.legend-buy { color: var(--green); }
+.legend-sell { color: var(--red); }
+
+/* Signal Cards */
+.signals-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.signal-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; transition: all 0.2s; }
+.signal-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.signal-card.buy { border-left: 4px solid var(--green); }
+.signal-card.sell { border-left: 4px solid var(--red); }
+.signal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.asset-name { font-size: 18px; font-weight: 700; }
+.timeframe { font-size: 12px; color: var(--text-dim); }
+.signal-body { margin-bottom: 12px; }
+.signal-label { font-size: 13px; color: var(--text-secondary); }
+.signal-value { font-size: 28px; font-weight: 800; }
+.signal-value.buy { color: var(--green); }
+.signal-value.sell { color: var(--red); }
+.confidence { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.conf-bar { flex: 1; height: 6px; background: var(--bg-dark); border-radius: 3px; margin: 0 12px; overflow: hidden; }
+.conf-fill { height: 100%; background: var(--green); border-radius: 3px; transition: width 0.3s; }
+
+/* Side Panel */
+.side-panel { display: flex; flex-direction: column; gap: 20px; }
+.stats-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
+.stat-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 14px; }
+.green { color: var(--green); }
+.red { color: var(--red); }
+.accuracy-bar-wrap { height: 8px; background: var(--bg-dark); border-radius: 4px; margin-top: 12px; overflow: hidden; }
+.accuracy-bar { height: 100%; background: var(--green); border-radius: 4px; transition: width 0.3s; }
+
+/* Signal Log */
+.log-card { max-height: 400px; display: flex; flex-direction: column; }
+.log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.log-header h3 { font-size: 18px; font-weight: 700; }
+.signal-log { flex: 1; overflow-y: auto; max-height: 320px; }
+.log-entry { padding: 12px; background: var(--bg-dark); border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+.log-time { color: var(--text-dim); font-size: 11px; }
+.log-empty { text-align: center; color: var(--text-dim); padding: 40px; }
+
+/* Responsive */
+@media (max-width: 1200px) { .dashboard-grid { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .signals-grid { grid-template-columns: 1fr; } .header { flex-direction: column; gap: 16px; } }
