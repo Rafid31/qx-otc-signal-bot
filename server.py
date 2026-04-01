@@ -46,6 +46,8 @@ YAHOO_MAP = {
 }
 BINANCE_MAP = {"BTCUSD_otc":"BTCUSDT","ETHUSD_otc":"ETHUSDT"}
 
+OTC_PAIRS = [
+
     {"id":"GBPUSD_otc","name":"GBP/USD OTC","category":"Forex","base_price":1.26500,"payout":38},
     {"id":"USDJPY_otc","name":"USD/JPY OTC","category":"Forex","base_price":149.500,"payout":93},
     {"id":"AUDUSD_otc","name":"AUD/USD OTC","category":"Forex","base_price":0.65200,"payout":88},
