@@ -1,122 +1,119 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QX OTC Signal Bot | Professional Trading Signals</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QX OTC Signal Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<div id="app">
-  <!-- HEADER -->
-  <header class="header">
+
+<!-- ═══════════════════════════  SETUP MODAL  ══════════════════════════════ -->
+<div id="setup-modal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-logo">
+      <svg width="40" height="40" viewBox="0 0 40 40" fill="none" aria-label="QX Signal Bot">
+        <rect width="40" height="40" rx="10" fill="#00c896"/>
+        <path d="M10 28 L20 12 L30 28" stroke="#0a0f0d" stroke-width="3" stroke-linejoin="round" fill="none"/>
+        <circle cx="20" cy="20" r="3" fill="#0a0f0d"/>
+      </svg>
+      <span>QX Signal Bot</span>
+    </div>
+    <h2>Connect to Backend</h2>
+    <p>Enter your Railway backend URL to start receiving real-time OTC signals.</p>
+    <div class="form-group">
+      <label for="backend-url">Railway Backend URL</label>
+      <input
+        type="text"
+        id="backend-url"
+        placeholder="https://your-app.up.railway.app"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <span class="hint">No trailing slash. Example: https://qx-bot.up.railway.app</span>
+    </div>
+    <button id="connect-btn" class="btn-primary">Connect &amp; Start</button>
+    <p class="demo-note">No backend yet? <button id="demo-btn" class="link-btn">Run in Demo Mode</button></p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════  MAIN APP  ═════════════════════════════════ -->
+<div id="app" class="hidden">
+
+  <!-- Header -->
+  <header class="app-header">
     <div class="header-left">
-      <div class="logo">
-        <span class="logo-icon">&#9654;</span>
-        <span class="logo-text">QX <span class="accent">Signal Bot</span></span>
-      </div>
-      <div class="status-bar">
-        <span id="conn-dot" class="dot dot-off"></span>
-        <span id="conn-label">Disconnected</span>
+      <svg width="32" height="32" viewBox="0 0 40 40" fill="none" aria-label="QX Signal Bot">
+        <rect width="40" height="40" rx="10" fill="#00c896"/>
+        <path d="M10 28 L20 12 L30 28" stroke="#0a0f0d" stroke-width="3" stroke-linejoin="round" fill="none"/>
+        <circle cx="20" cy="20" r="3" fill="#0a0f0d"/>
+      </svg>
+      <div>
+        <h1>QX OTC Signal Bot</h1>
+        <span id="mode-badge" class="mode-badge">DEMO</span>
       </div>
     </div>
     <div class="header-right">
-      <div class="server-time">
-        <span class="label">Server Time</span>
-        <span id="server-clock">--:--:--</span>
+      <div class="stat-pill">
+        <span class="stat-label">Signals</span>
+        <span id="total-signals" class="stat-val">0</span>
       </div>
-      <div class="accuracy-badge">
-        <span class="label">Accuracy</span>
-        <span id="accuracy-pct">--%</span>
+      <div class="stat-pill">
+        <span class="stat-label">Accuracy</span>
+        <span id="accuracy-val" class="stat-val accent">—</span>
       </div>
+      <div id="conn-status" class="conn-badge disconnected">
+        <span class="conn-dot"></span>
+        <span>Connecting…</span>
+      </div>
+      <button id="settings-btn" class="icon-btn" aria-label="Settings" title="Change backend URL">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
     </div>
   </header>
 
-  <!-- AUTH PANEL -->
-  <div id="auth-panel" class="card auth-card">
-    <h2 class="card-title">&#128274; Connect to QX Broker</h2>
-    <p class="auth-desc">Enter your QX Broker session token to receive live OTC signals. Your token is used only in your browser and is never stored on any server.</p>
-    <div class="form-group">
-      <label for="token-input">Session Token (SSID)</label>
-      <div class="token-row">
-        <input type="password" id="token-input" placeholder="Paste your QX Broker session token here..." autocomplete="off">
-        <button id="toggle-token" class="btn btn-ghost">Show</button>
-      </div>
-      <p class="hint">How to get your token: Open QX Broker &rarr; DevTools (F12) &rarr; Application &rarr; Local Storage &rarr; Copy <code>token</code> value.</p>
-    </div>
-    <div class="form-group">
-      <label>Timeframe</label>
-      <div class="tf-row">
-        <button class="tf-btn active" data-tf="60">1 Min</button>
-        <button class="tf-btn" data-tf="300">5 Min</button>
-        <button class="tf-btn" data-tf="900">15 Min</button>
-      </div>
-    </div>
-    <button id="connect-btn" class="btn btn-primary">&#9889; Connect &amp; Start Signals</button>
-    <div id="auth-error" class="error-msg hidden"></div>
+  <!-- Countdown Bar -->
+  <div class="countdown-bar">
+    <span class="countdown-label">Next candle in</span>
+    <span id="countdown" class="countdown-val">60s</span>
+    <div class="countdown-track"><div id="countdown-fill" class="countdown-fill"></div></div>
+    <span id="server-time" class="server-time">--:--:--</span>
   </div>
 
-  <!-- MAIN DASHBOARD -->
-  <div id="dashboard" class="hidden">
-    <div class="dashboard-grid">
+  <!-- Signal Grid -->
+  <main class="signal-grid" id="signal-grid">
+    <!-- Cards injected by JS -->
+  </main>
 
-      <!-- SIGNAL CARDS -->
-      <section class="signals-section">
-        <div class="section-header">
-          <h2>Live OTC Signals</h2>
-          <div class="legend">
-            <span class="legend-buy">&#9650; BUY</span>
-            <span class="legend-sell">&#9660; SELL</span>
-          </div>
-        </div>
-        <div id="signals-grid" class="signals-grid">
-          <!-- Populated by JS -->
-        </div>
-      </section>
-
-      <!-- SIDE PANEL -->
-      <aside class="side-panel">
-        <!-- STATS -->
-        <div class="card stats-card">
-          <h3>Session Stats</h3>
-          <div class="stat-row">
-            <span>Total Signals</span>
-            <span id="stat-total">0</span>
-          </div>
-          <div class="stat-row">
-            <span>Correct</span>
-            <span id="stat-correct" class="green">0</span>
-          </div>
-          <div class="stat-row">
-            <span>Wrong</span>
-            <span id="stat-wrong" class="red">0</span>
-          </div>
-          <div class="stat-row">
-            <span>Accuracy</span>
-            <span id="stat-accuracy">--%</span>
-          </div>
-          <div class="accuracy-bar-wrap">
-            <div id="accuracy-bar" class="accuracy-bar" style="width:0%"></div>
-          </div>
-        </div>
-
-        <!-- SIGNAL LOG -->
-        <div class="card log-card">
-          <div class="log-header">
-            <h3>Signal Log</h3>
-            <button id="clear-log" class="btn btn-ghost btn-sm">Clear</button>
-          </div>
-          <div id="signal-log" class="signal-log">
-            <div class="log-empty">No signals yet. Connect to start.</div>
-          </div>
-        </div>
-
-        <!-- DISCONNECT -->
-        <button id="disconnect-btn" class="btn btn-danger">&#9744; Disconnect</button>
-      </aside>
+  <!-- Signal History -->
+  <section class="history-section">
+    <div class="history-header">
+      <h2>Signal History</h2>
+      <button id="clear-history" class="ghost-btn">Clear</button>
     </div>
-  </div>
-</div>
+    <div class="history-table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Pair</th>
+            <th>Signal</th>
+            <th>Confidence</th>
+            <th>Price</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody id="history-body">
+          <tr class="empty-row"><td colspan="6">No signals yet — waiting for data…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</div><!-- /#app -->
 
 <script src="engine.js"></script>
 <script src="app.js"></script>
