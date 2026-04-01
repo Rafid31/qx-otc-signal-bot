@@ -45,6 +45,9 @@ const countdownFill = document.getElementById('countdown-fill');
 const serverTimeEl  = document.getElementById('server-time');
 const clearHistBtn  = document.getElementById('clear-history');
 
+// ── Auto-connect to Railway backend ─────────────────────────────────────────
+const RAILWAY_URL = 'https://qx-otc-signal-bot-production.up.railway.app';
+
 // ── Setup handlers ────────────────────────────────────────────────────────────
 connectBtn.addEventListener('click', () => {
   const url = backendInput.value.trim().replace(/\/$/, '');
@@ -309,6 +312,11 @@ function setConnStatus(connected, label) {
   connStatus.className = `conn-badge ${connected ? 'connected' : 'disconnected'}`;
   connStatus.innerHTML = `<span class="conn-dot"></span><span>${label}</span>`;
 }
+
+// ── Auto-fill Railway URL on load ────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  if (backendInput) backendInput.value = RAILWAY_URL;
+});
 
 // ── Local clock (updates every second) ───────────────────────────────────────
 setInterval(() => {
