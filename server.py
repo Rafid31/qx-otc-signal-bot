@@ -18,14 +18,19 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# ── Try pyquotex ─────────────────────────────────────────────────────────────
+# ── Try quotexpy (pip install quotexpy) ──────────────────────────────────────
 QUOTEX_AVAILABLE = False
 try:
-    from quotexapi.stable_api import Quotex
+    from quotexpy.new import Quotex as QuotexClient
     QUOTEX_AVAILABLE = True
-    logger.info("✅ pyquotex loaded")
+    logger.info("✅ quotexpy loaded")
 except Exception:
-    logger.warning("⚠️  pyquotex not found – running in DEMO mode")
+    try:
+        from pyquotex.stable_api import Quotex as QuotexClient
+        QUOTEX_AVAILABLE = True
+        logger.info("✅ pyquotex loaded")
+    except Exception:
+        logger.warning("⚠️  No Quotex library found – running in DEMO mode")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 QX_EMAIL    = os.getenv("QX_EMAIL", "")
@@ -345,10 +350,12 @@ async def connect_quotex():
     if not QUOTEX_AVAILABLE or not QX_EMAIL or not QX_PASSWORD:
         return False
     try:
-        quotex_client = Quotex(email=QX_EMAIL, password=QX_PASSWORD)
-        check, reason = await quotex_client.connect()
+        client = QuotexClient(email=QX_EMAIL, password=QX_PASSWORD, browser=False)
+        loop = asyncio.get_event_loop()
+        check, reason = await loop.run_in_executor(None, client.connect)
         if check:
-            logger.info("✅ Connected to QX Broker")
+            quotex_client = client
+            logger.info("✅ Connected to QX Broker (quotexpy)")
             return True
         logger.error(f"QX connection failed: {reason}")
     except Exception as e:
@@ -361,12 +368,14 @@ async def fetch_candles_quotex(pair_id: str) -> Optional[List[Dict]]:
     if not quotex_client:
         return None
     try:
-        # Get asset name without _otc suffix for some API calls
         asset = pair_id.upper()
-        status, candles = await quotex_client.get_candles(asset, 60, 100, time.time())
-        if status and candles:
+        loop = asyncio.get_event_loop()
+        candles = await loop.run_in_executor(
+            None, lambda: quotex_client.get_candles(asset, 60, 100)
+        )
+        if candles:
             result = []
-            for c in candles:
+            for c in (candles if isinstance(candles, list) else []):
                 if isinstance(c, dict):
                     result.append({
                         "open":  float(c.get("open",  c.get("o", 0))),
