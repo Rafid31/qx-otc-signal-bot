@@ -1,10 +1,12 @@
 """
-QX OTC Signal Bot — FastAPI Backend v2.0.0
+QX OTC Signal Bot — FastAPI Backend v2.1.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Real data only — Yahoo Finance (Forex/Commodities) + Binance (Crypto)
+• Real data only — Yahoo Finance REST (Forex/Commodities) + Binance (Crypto)
 • All 28 QX OTC pairs with proper "OTC" names
 • 6-indicator weighted voting signal algorithm
-• Anti-blocking: browser User-Agent + query1/query2 fallback
+• Anti-blocking: full browser headers (UA, Referer, Origin, Sec-Fetch)
+  + query1/query2 rotation + range=1d/5d/2d fallback
+• NO yfinance library — direct REST only (avoids Railway proxy blocks)
 • WebSocket broadcasting every second + REST fallback
 • No fake / simulated signals — demo mode only when ALL fetches fail
 """
@@ -13,13 +15,13 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 import requests
-import yfinance as yf
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -37,7 +39,7 @@ log = logging.getLogger("qx_bot")
 # ══════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════
-VERSION        = "2.0.0"
+VERSION        = "2.1.0"
 MIN_CANDLES    = 30        # need at least this many before signaling
 SEED_CANDLES   = 90        # candles to seed on startup
 MAX_CANDLES    = 200       # rolling window cap
@@ -93,34 +95,59 @@ store_lock = asyncio.Lock()
 
 # ══════════════════════════════════════════════════════════
 # ANTI-BLOCKING SESSION
+# Full Chrome browser header set — mirrors a real browser request.
+# This is the key to bypassing Yahoo Finance server-side bot detection.
 # ══════════════════════════════════════════════════════════
 def _make_session() -> requests.Session:
-    """Return a requests.Session with browser-like headers to avoid blocks."""
+    """
+    Return a requests.Session with a complete Chrome browser header set.
+    Includes User-Agent, Referer, Origin, Accept, and all Sec-Fetch headers
+    that Yahoo Finance checks to distinguish bots from real browsers.
+    """
     s = requests.Session()
     s.headers.update({
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/122.0.0.0 Safari/537.36"
+            "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
+        "Accept":          "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
+        "Origin":          "https://finance.yahoo.com",
+        "Referer":         "https://finance.yahoo.com/",
         "Connection":      "keep-alive",
         "Cache-Control":   "no-cache",
+        "Pragma":          "no-cache",
+        "Sec-Ch-Ua":       '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile":   "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest":  "empty",
+        "Sec-Fetch-Mode":  "cors",
+        "Sec-Fetch-Site":  "same-site",
     })
     return s
 
 
 # ══════════════════════════════════════════════════════════
-# DATA FETCHING — YAHOO FINANCE
+# DATA FETCHING — YAHOO FINANCE (direct REST, no yfinance lib)
 # ══════════════════════════════════════════════════════════
+
+# Endpoint rotation and range fallback matrix.
+# We try all combinations until we get ≥ MIN_CANDLES rows.
+_YF_HOSTS  = [
+    "https://query1.finance.yahoo.com",
+    "https://query2.finance.yahoo.com",
+]
+_YF_RANGES = ["1d", "5d", "2d"]   # 5d gives more bars if market just opened
+
+
 def _parse_yahoo_json(data: dict) -> Optional[pd.DataFrame]:
-    """Parse Yahoo Finance chart JSON into a clean OHLC DataFrame."""
+    """Parse Yahoo Finance v8 chart JSON → clean OHLC DataFrame."""
     try:
-        result    = data["chart"]["result"][0]
-        ts        = result["timestamp"]
-        quote     = result["indicators"]["quote"][0]
+        result = data["chart"]["result"][0]
+        ts     = result["timestamp"]
+        quote  = result["indicators"]["quote"][0]
         df = pd.DataFrame(
             {
                 "Open":  quote["open"],
@@ -132,62 +159,50 @@ def _parse_yahoo_json(data: dict) -> Optional[pd.DataFrame]:
         )
         return df.dropna()
     except Exception as exc:
-        log.debug(f"_parse_yahoo_json failed: {exc}")
+        log.debug(f"_parse_yahoo_json error: {exc}")
         return None
 
 
 def fetch_yahoo_candles(symbol: str, limit: int = SEED_CANDLES) -> Optional[pd.DataFrame]:
     """
-    Fetch 1-min OHLC from Yahoo Finance.
-    Attempt order: yfinance lib → query1 REST → query2 REST → None
+    Fetch 1-min OHLC from Yahoo Finance using direct REST calls only.
+    No yfinance library — avoids its proxy/auth issues on Railway.
+
+    Anti-blocking strategy:
+      1. Full Chrome browser headers (UA, Referer, Origin, Sec-Fetch-*)
+      2. Rotate between query1 and query2 endpoints
+      3. Try range=1d first; fall back to 5d / 2d for more bars
+      4. Back off 0.4s between attempts to avoid rate-limiting
     """
-    # ── Attempt 1: yfinance with custom session ───────────
-    try:
-        sess   = _make_session()
-        ticker = yf.Ticker(symbol, session=sess)
-        df     = ticker.history(period="1d", interval="1m")
-        if df is not None and len(df) >= 10:
-            df = df[["Open", "High", "Low", "Close"]].dropna().tail(limit)
-            log.info(f"  ✓ yf   {symbol}: {len(df)} candles")
-            return df
-    except Exception as exc:
-        log.debug(f"  yf attempt failed {symbol}: {exc}")
+    for host in _YF_HOSTS:
+        for range_val in _YF_RANGES:
+            try:
+                sess = _make_session()
+                url  = (
+                    f"{host}/v8/finance/chart/{symbol}"
+                    f"?interval=1m&range={range_val}&includePrePost=false"
+                )
+                r = sess.get(url, timeout=14)
+                if r.status_code == 429:
+                    log.debug(f"  rate-limited {symbol} ({host[-6:]}/{range_val}), backing off")
+                    time.sleep(1.0)
+                    continue
+                if r.status_code != 200:
+                    log.debug(f"  HTTP {r.status_code} for {symbol} ({host[-6:]}/{range_val})")
+                    continue
+                df = _parse_yahoo_json(r.json())
+                if df is not None and len(df) >= 10:
+                    df = df.tail(limit)
+                    log.info(
+                        f"  ✓ Yahoo {symbol} "
+                        f"({host.split('//')[1][:6]}/{range_val}): {len(df)} candles"
+                    )
+                    return df
+            except Exception as exc:
+                log.debug(f"  Yahoo attempt failed {symbol} {range_val}: {type(exc).__name__}: {exc}")
+            time.sleep(0.4)   # brief back-off between attempts
 
-    # ── Attempt 2: query1.finance.yahoo.com ──────────────
-    try:
-        sess = _make_session()
-        url  = (
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-            f"?interval=1m&range=1d"
-        )
-        r  = sess.get(url, timeout=12)
-        r.raise_for_status()
-        df = _parse_yahoo_json(r.json())
-        if df is not None and len(df) >= 10:
-            df = df.tail(limit)
-            log.info(f"  ✓ q1   {symbol}: {len(df)} candles")
-            return df
-    except Exception as exc:
-        log.debug(f"  query1 attempt failed {symbol}: {exc}")
-
-    # ── Attempt 3: query2.finance.yahoo.com ──────────────
-    try:
-        sess = _make_session()
-        url  = (
-            f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
-            f"?interval=1m&range=1d"
-        )
-        r  = sess.get(url, timeout=12)
-        r.raise_for_status()
-        df = _parse_yahoo_json(r.json())
-        if df is not None and len(df) >= 10:
-            df = df.tail(limit)
-            log.info(f"  ✓ q2   {symbol}: {len(df)} candles")
-            return df
-    except Exception as exc:
-        log.debug(f"  query2 attempt failed {symbol}: {exc}")
-
-    log.warning(f"  ✗ All Yahoo attempts exhausted for {symbol}")
+    log.warning(f"  ✗ All Yahoo REST attempts failed for {symbol} — will use demo fallback")
     return None
 
 
