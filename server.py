@@ -39,7 +39,7 @@ log = logging.getLogger("qx_bot")
 # ══════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════
-VERSION        = "2.1.0"
+VERSION        = "2.2.0"
 MIN_CANDLES    = 30        # need at least this many before signaling
 SEED_CANDLES   = 90        # candles to seed on startup
 MAX_CANDLES    = 200       # rolling window cap
@@ -380,9 +380,9 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
     rsi_v  = None
     rsi_lbl = ""
     if not np.isnan(rsi):
-        if rsi <= 30:
+        if rsi <= 40:
             rsi_v, rsi_lbl = "BUY",  f"RSI oversold {rsi:.1f}"
-        elif rsi >= 70:
+        elif rsi >= 60:
             rsi_v, rsi_lbl = "SELL", f"RSI overbought {rsi:.1f}"
 
     # ── 2. Bollinger Bands (20,2) — weight 3.0 ───────────
@@ -392,10 +392,13 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
     bb_v   = None
     bb_lbl = ""
     if not (np.isnan(bb_u) or np.isnan(bb_l)):
-        if last_close <= bb_l:
-            bb_v, bb_lbl = "BUY",  f"BB lower {bb_l:.5g}"
-        elif last_close >= bb_u:
-            bb_v, bb_lbl = "SELL", f"BB upper {bb_u:.5g}"
+        bb_range = bb_u - bb_l
+        if bb_range > 0:
+            bb_pos = (last_close - bb_l) / bb_range   # 0 = at lower, 1 = at upper
+            if bb_pos <= 0.25:
+                bb_v, bb_lbl = "BUY",  f"BB lower zone {bb_pos*100:.0f}%"
+            elif bb_pos >= 0.75:
+                bb_v, bb_lbl = "SELL", f"BB upper zone {bb_pos*100:.0f}%"
 
     # ── 3. Stochastic (14,3) — weight 2.5 ────────────────
     k_s, d_s = _stochastic(df)
@@ -404,9 +407,9 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
     st_v = None
     st_lbl = ""
     if not (np.isnan(k_v) or np.isnan(d_v)):
-        if k_v < 20 and d_v < 20:
+        if k_v < 20:
             st_v, st_lbl = "BUY",  f"Stoch oversold K{k_v:.0f}/D{d_v:.0f}"
-        elif k_v > 80 and d_v > 80:
+        elif k_v > 80:
             st_v, st_lbl = "SELL", f"Stoch overbought K{k_v:.0f}/D{d_v:.0f}"
 
     # ── 4. OTC Reversal Pattern — weight 2.5 ─────────────
