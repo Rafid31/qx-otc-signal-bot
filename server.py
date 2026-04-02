@@ -1,328 +1,733 @@
 """
-QX OTC Signal Bot — Real Market Data v2.1
-------------------------------------------
-Prices come from REAL sources:
-  • Forex & Commodities → Yahoo Finance 1-min OHLC (yfinance)
-  • Crypto              → Binance public API 1-min klines
-
-Signal = prediction for NEXT 1-minute candle:
-  BUY  → next candle expected to close HIGHER than open
-  SELL → next candle expected to close LOWER than open
-  WAIT → indicators disagree — skip this candle
-
-QX OTC prices track real market prices closely.
-Real data = real signals.
+QX OTC Signal Bot — FastAPI Backend v2.0.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+• Real data only — Yahoo Finance (Forex/Commodities) + Binance (Crypto)
+• All 28 QX OTC pairs with proper "OTC" names
+• 6-indicator weighted voting signal algorithm
+• Anti-blocking: browser User-Agent + query1/query2 fallback
+• WebSocket broadcasting every second + REST fallback
+• No fake / simulated signals — demo mode only when ALL fetches fail
 """
-import asyncio, os, json, random, logging, requests as req_lib
+
+import asyncio
+import json
+import logging
+import os
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Set
+from typing import Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+import requests
+import yfinance as yf
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn, numpy as np
-from collections import deque
+from starlette.concurrency import run_in_threadpool
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
-PORT = int(os.getenv("PORT", 8000))
+# ══════════════════════════════════════════════════════════
+# LOGGING
+# ══════════════════════════════════════════════════════════
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
+log = logging.getLogger("qx_bot")
 
-try:
-    import yfinance as yf
-    YFINANCE_OK = True
-    logger.info("yfinance ready")
-except Exception:
-    YFINANCE_OK = False
-    logger.warning("yfinance not available — will use demo for forex/commodities")
+# ══════════════════════════════════════════════════════════
+# CONSTANTS
+# ══════════════════════════════════════════════════════════
+VERSION        = "2.0.0"
+MIN_CANDLES    = 30        # need at least this many before signaling
+SEED_CANDLES   = 90        # candles to seed on startup
+MAX_CANDLES    = 200       # rolling window cap
+REFRESH_SECS   = 60        # data refresh interval
+BROADCAST_SECS = 1         # WS broadcast interval
+TOTAL_WEIGHT   = 14.5      # sum of all indicator weights
+SIGNAL_THRESH  = 60.0      # % vote threshold to fire BUY / SELL
 
-YAHOO_MAP = {
-    "EURUSD_otc":"EURUSD=X","GBPUSD_otc":"GBPUSD=X","USDJPY_otc":"JPY=X",
-    "AUDUSD_otc":"AUDUSD=X","EURJPY_otc":"EURJPY=X","USDCAD_otc":"CAD=X",
-    "EURGBP_otc":"EURGBP=X","USDCHF_otc":"CHF=X","AUDCAD_otc":"AUDCAD=X",
-    "EURAUD_otc":"EURAUD=X","GBPJPY_otc":"GBPJPY=X","CHFJPY_otc":"CHFJPY=X",
-    "NZDCAD_otc":"NZDCAD=X","NZDCHF_otc":"NZDCHF=X","AUDCHF_otc":"AUDCHF=X",
-    "EURCHF_otc":"EURCHF=X","CADJPY_otc":"CADJPY=X","GBPAUD_otc":"GBPAUD=X",
-    "GBPCAD_otc":"GBPCAD=X","EURCAD_otc":"EURCAD=X","NZDUSD_otc":"NZDUSD=X",
-    "GBPCHF_otc":"GBPCHF=X","XAUUSD_otc":"GC=F","XAGUSD_otc":"SI=F",
-    "UKOIL_otc":"BZ=F","USOIL_otc":"CL=F",
+# ══════════════════════════════════════════════════════════
+# ALL 28 QX OTC PAIRS
+# ══════════════════════════════════════════════════════════
+PAIRS: Dict[str, dict] = {
+    # ── FOREX OTC (22 pairs) ─────────────────────────────
+    "EURUSD_otc": {"name": "EUR/USD OTC",  "symbol": "EURUSD=X",  "source": "yahoo",   "category": "Forex",     "payout": 80},
+    "GBPUSD_otc": {"name": "GBP/USD OTC",  "symbol": "GBPUSD=X",  "source": "yahoo",   "category": "Forex",     "payout": 38},
+    "USDJPY_otc": {"name": "USD/JPY OTC",  "symbol": "JPY=X",     "source": "yahoo",   "category": "Forex",     "payout": 93},
+    "AUDUSD_otc": {"name": "AUD/USD OTC",  "symbol": "AUDUSD=X",  "source": "yahoo",   "category": "Forex",     "payout": 88},
+    "EURJPY_otc": {"name": "EUR/JPY OTC",  "symbol": "EURJPY=X",  "source": "yahoo",   "category": "Forex",     "payout": 85},
+    "USDCAD_otc": {"name": "USD/CAD OTC",  "symbol": "CAD=X",     "source": "yahoo",   "category": "Forex",     "payout": 84},
+    "EURGBP_otc": {"name": "EUR/GBP OTC",  "symbol": "EURGBP=X",  "source": "yahoo",   "category": "Forex",     "payout": 95},
+    "USDCHF_otc": {"name": "USD/CHF OTC",  "symbol": "CHF=X",     "source": "yahoo",   "category": "Forex",     "payout": 85},
+    "AUDCAD_otc": {"name": "AUD/CAD OTC",  "symbol": "AUDCAD=X",  "source": "yahoo",   "category": "Forex",     "payout": 88},
+    "EURAUD_otc": {"name": "EUR/AUD OTC",  "symbol": "EURAUD=X",  "source": "yahoo",   "category": "Forex",     "payout": 82},
+    "GBPJPY_otc": {"name": "GBP/JPY OTC",  "symbol": "GBPJPY=X",  "source": "yahoo",   "category": "Forex",     "payout": 90},
+    "CHFJPY_otc": {"name": "CHF/JPY OTC",  "symbol": "CHFJPY=X",  "source": "yahoo",   "category": "Forex",     "payout": 85},
+    "NZDCAD_otc": {"name": "NZD/CAD OTC",  "symbol": "NZDCAD=X",  "source": "yahoo",   "category": "Forex",     "payout": 87},
+    "NZDCHF_otc": {"name": "NZD/CHF OTC",  "symbol": "NZDCHF=X",  "source": "yahoo",   "category": "Forex",     "payout": 87},
+    "AUDCHF_otc": {"name": "AUD/CHF OTC",  "symbol": "AUDCHF=X",  "source": "yahoo",   "category": "Forex",     "payout": 86},
+    "EURCHF_otc": {"name": "EUR/CHF OTC",  "symbol": "EURCHF=X",  "source": "yahoo",   "category": "Forex",     "payout": 78},
+    "CADJPY_otc": {"name": "CAD/JPY OTC",  "symbol": "CADJPY=X",  "source": "yahoo",   "category": "Forex",     "payout": 85},
+    "GBPAUD_otc": {"name": "GBP/AUD OTC",  "symbol": "GBPAUD=X",  "source": "yahoo",   "category": "Forex",     "payout": 83},
+    "GBPCAD_otc": {"name": "GBP/CAD OTC",  "symbol": "GBPCAD=X",  "source": "yahoo",   "category": "Forex",     "payout": 82},
+    "EURCAD_otc": {"name": "EUR/CAD OTC",  "symbol": "EURCAD=X",  "source": "yahoo",   "category": "Forex",     "payout": 83},
+    "NZDUSD_otc": {"name": "NZD/USD OTC",  "symbol": "NZDUSD=X",  "source": "yahoo",   "category": "Forex",     "payout": 86},
+    "GBPCHF_otc": {"name": "GBP/CHF OTC",  "symbol": "GBPCHF=X",  "source": "yahoo",   "category": "Forex",     "payout": 84},
+    # ── COMMODITIES OTC (4 pairs) ─────────────────────────
+    "XAUUSD_otc": {"name": "Gold OTC",      "symbol": "GC=F",      "source": "yahoo",   "category": "Commodity", "payout": 87},
+    "XAGUSD_otc": {"name": "Silver OTC",    "symbol": "SI=F",      "source": "yahoo",   "category": "Commodity", "payout": 93},
+    "UKOIL_otc":  {"name": "UK Brent OTC",  "symbol": "BZ=F",      "source": "yahoo",   "category": "Commodity", "payout": 93},
+    "USOIL_otc":  {"name": "US Crude OTC",  "symbol": "CL=F",      "source": "yahoo",   "category": "Commodity", "payout": 84},
+    # ── CRYPTO OTC — Binance only (2 pairs) ──────────────
+    "BTCUSD_otc": {"name": "Bitcoin OTC",   "symbol": "BTCUSDT",   "source": "binance", "category": "Crypto",    "payout": 80},
+    "ETHUSD_otc": {"name": "Ethereum OTC",  "symbol": "ETHUSDT",   "source": "binance", "category": "Crypto",    "payout": 66},
 }
-BINANCE_MAP = {"BTCUSD_otc":"BTCUSDT","ETHUSD_otc":"ETHUSDT"}
 
-OTC_PAIRS = [
+# ══════════════════════════════════════════════════════════
+# GLOBAL STATE
+# ══════════════════════════════════════════════════════════
+price_store: Dict[str, Optional[pd.DataFrame]] = {pid: None for pid in PAIRS}
+data_mode:   Dict[str, str]                    = {pid: "demo" for pid in PAIRS}
+store_lock = asyncio.Lock()
 
-    {"id":"GBPUSD_otc","name":"GBP/USD OTC","category":"Forex","base_price":1.26500,"payout":38},
-    {"id":"USDJPY_otc","name":"USD/JPY OTC","category":"Forex","base_price":149.500,"payout":93},
-    {"id":"AUDUSD_otc","name":"AUD/USD OTC","category":"Forex","base_price":0.65200,"payout":88},
-    {"id":"EURJPY_otc","name":"EUR/JPY OTC","category":"Forex","base_price":161.800,"payout":85},
-    {"id":"USDCAD_otc","name":"USD/CAD OTC","category":"Forex","base_price":1.36500,"payout":84},
-    {"id":"EURGBP_otc","name":"EUR/GBP OTC","category":"Forex","base_price":0.85500,"payout":95},
-    {"id":"USDCHF_otc","name":"USD/CHF OTC","category":"Forex","base_price":0.89500,"payout":85},
-    {"id":"AUDCAD_otc","name":"AUD/CAD OTC","category":"Forex","base_price":0.89000,"payout":88},
-    {"id":"EURAUD_otc","name":"EUR/AUD OTC","category":"Forex","base_price":1.65000,"payout":82},
-    {"id":"GBPJPY_otc","name":"GBP/JPY OTC","category":"Forex","base_price":188.500,"payout":90},
-    {"id":"CHFJPY_otc","name":"CHF/JPY OTC","category":"Forex","base_price":167.000,"payout":85},
-    {"id":"NZDCAD_otc","name":"NZD/CAD OTC","category":"Forex","base_price":0.82000,"payout":87},
-    {"id":"NZDCHF_otc","name":"NZD/CHF OTC","category":"Forex","base_price":0.52000,"payout":87},
-    {"id":"AUDCHF_otc","name":"AUD/CHF OTC","category":"Forex","base_price":0.58000,"payout":86},
-    {"id":"EURCHF_otc","name":"EUR/CHF OTC","category":"Forex","base_price":0.97000,"payout":78},
-    {"id":"CADJPY_otc","name":"CAD/JPY OTC","category":"Forex","base_price":109.500,"payout":85},
-    {"id":"GBPAUD_otc","name":"GBP/AUD OTC","category":"Forex","base_price":1.94000,"payout":83},
-    {"id":"GBPCAD_otc","name":"GBP/CAD OTC","category":"Forex","base_price":1.73000,"payout":82},
-    {"id":"EURCAD_otc","name":"EUR/CAD OTC","category":"Forex","base_price":1.48000,"payout":83},
-    {"id":"NZDUSD_otc","name":"NZD/USD OTC","category":"Forex","base_price":0.60500,"payout":86},
-    {"id":"GBPCHF_otc","name":"GBP/CHF OTC","category":"Forex","base_price":1.13500,"payout":84},
-    {"id":"XAUUSD_otc","name":"Gold OTC","category":"Commodity","base_price":2320.00,"payout":87},
-    {"id":"XAGUSD_otc","name":"Silver OTC","category":"Commodity","base_price":27.500,"payout":93},
-    {"id":"UKOIL_otc","name":"UK Brent OTC","category":"Commodity","base_price":85.500,"payout":93},
-    {"id":"USOIL_otc","name":"US Crude OTC","category":"Commodity","base_price":80.500,"payout":84},
-    {"id":"BTCUSD_otc","name":"Bitcoin OTC","category":"Crypto","base_price":65000.00,"payout":80},
-  
-    {"id":"ETHUSD_otc","name":"Ethereum OTC","category":"Crypto","base_price":3500.00,"payout":80}]
-class SignalEngine:
-    def __init__(self, pid):
-        self.pair_id=pid
-        self.closes=deque(maxlen=150); self.highs=deque(maxlen=150)
-        self.lows=deque(maxlen=150);   self.opens=deque(maxlen=150)
-        self.data_source="pending"
-    def bulk_load(self, candles):
-        for c in candles:
-            self.opens.append(c["open"]); self.highs.append(c["high"])
-            self.lows.append(c["low"]);   self.closes.append(c["close"])
-    def add_candle(self,o,h,l,c):
-        self.opens.append(o); self.highs.append(h)
-        self.lows.append(l);  self.closes.append(c)
-    def _ema(self, data, p):
-        if not data: return 0.0
-        k=2/(p+1); e=data[0]
-        for v in data[1:]: e=v*k+e*(1-k)
-        return e
-    def rsi(self, p=14):
-        c=list(self.closes)
-        if len(c)<p+2: return None
-        d=np.diff(c[-(p+1):]); g=np.where(d>0,d,0); l=np.where(d<0,-d,0)
-        ag,al=np.mean(g),np.mean(l)
-        return 100 if al==0 else 100-(100/(1+ag/al))
-    def macd(self):
-        c=list(self.closes)
-        if len(c)<35: return None,None,None
-        m=self._ema(c,12)-self._ema(c,26); s=m*0.85; return m,s,m-s
-    def bollinger(self, p=20):
-        c=list(self.closes)
-        if len(c)<p: return None,None,None,None
-        sl=c[-p:]; mid=float(np.mean(sl)); std=float(np.std(sl))
-        up=mid+2*std; lo=mid-2*std
-        pct=(c[-1]-lo)/(up-lo) if (up-lo)>0 else 0.5
-        return up,mid,lo,pct
-    def stochastic(self, p=14):
-        c,h,l=list(self.closes),list(self.highs),list(self.lows)
-        if len(c)<p: return None,None
-        hh=max(h[-p:]); ll=min(l[-p:])
-        if hh==ll: return 50.0,50.0
-        k=100*(c[-1]-ll)/(hh-ll)
-        dv=[]
-        for i in range(3):
-            idx=-(i+1)
-            if abs(idx)>len(c): break
-            _h=h[max(-p+idx,-len(h)):idx if idx else len(h)]
-            _l=l[max(-p+idx,-len(l)):idx if idx else len(l)]
-            _hh=max(_h) if _h else hh; _ll=min(_l) if _l else ll
-            if _hh!=_ll: dv.append(100*(c[idx]-_ll)/(_hh-_ll))
-        return k, float(np.mean(dv)) if dv else k
-    def otc_pattern(self):
-        c,o=list(self.closes),list(self.opens)
-        if len(c)<5: return 0.0
-        dirs=[1 if c[-i]>o[-i] else -1 for i in range(3,0,-1)]
-        if all(d==-1 for d in dirs): return 1.0
-        if all(d==1 for d in dirs): return -1.0
-        if self.highs:
-            hl=list(self.highs)[-1]; ll=list(self.lows)[-1]; rng=hl-ll
-            if rng>0:
-                lw=min(o[-1],c[-1])-ll; uw=hl-max(o[-1],c[-1])
-                if lw/rng>0.65: return 0.6
-                if uw/rng>0.65: return -0.6
-        return 0.0
-    def generate_signal(self):
-        if len(self.closes)<30:
-            return {"signal":"WAIT","confidence":0,"reason":"Loading real market data...","source":self.data_source}
-        votes=[]
-        r=self.rsi()
-        if r is not None:
-            if r<=25: votes.append((1,3.0,f"RSI oversold {r:.1f}"))
-            elif r<=35: votes.append((1,1.8,f"RSI low {r:.1f}"))
-            elif r>=75: votes.append((-1,3.0,f"RSI overbought {r:.1f}"))
-            elif r>=65: votes.append((-1,1.8,f"RSI high {r:.1f}"))
-            else: votes.append((1 if r<50 else -1,0.5,f"RSI neutral {r:.1f}"))
-        m,s,h=self.macd()
-        if m is not None:
-            if m>0 and h>0: votes.append((1,2.0,"MACD bullish cross"))
-            elif m<0 and h<0: votes.append((-1,2.0,"MACD bearish cross"))
-            elif h>0: votes.append((1,1.0,"MACD rising"))
-            else: votes.append((-1,1.0,"MACD falling"))
-        _,_,_,pb=self.bollinger()
-        if pb is not None:
-            if pb<=0.05: votes.append((1,3.0,"BB lower band bounce"))
-            elif pb<=0.20: votes.append((1,1.5,"Near lower BB"))
-            elif pb>=0.95: votes.append((-1,3.0,"BB upper band reject"))
-            elif pb>=0.80: votes.append((-1,1.5,"Near upper BB"))
-            else: votes.append((1 if pb<0.5 else -1,0.4,"BB mid zone"))
-        k,d=self.stochastic()
-        if k is not None:
-            if k<20 and d<20: votes.append((1,2.5,f"Stoch oversold {k:.0f}"))
-            elif k>80 and d>80: votes.append((-1,2.5,f"Stoch overbought {k:.0f}"))
-            elif k>d: votes.append((1,1.0,"Stoch K>D bullish"))
-            else: votes.append((-1,1.0,"Stoch K<D bearish"))
-        c=list(self.closes)
-        if len(c)>=21:
-            cross=self._ema(c,9)-self._ema(c,21)
-            votes.append((1 if cross>0 else -1,1.5,f"EMA9/21 {'bull' if cross>0 else 'bear'}"))
-        otc=self.otc_pattern()
-        if abs(otc)>0: votes.append((1 if otc>0 else -1,abs(otc)*2.5,"OTC reversal pattern"))
-        if not votes: return {"signal":"WAIT","confidence":0,"reason":"No indicators","source":self.data_source}
-        bull=sum(w for d,w,_ in votes if d==1)
-        bear=sum(w for d,w,_ in votes if d==-1)
-        tot=bull+bear
-        bp=(bull/tot)*100 if tot else 50; sep=(bear/tot)*100 if tot else 50
-        reasons=" | ".join(r for _,_,r in sorted(votes,key=lambda x:x[1],reverse=True)[:3])
-        if bp>=60: return {"signal":"BUY","confidence":min(int(bp),95),"reason":reasons,"source":self.data_source}
-        if sep>=60: return {"signal":"SELL","confidence":min(int(sep),95),"reason":reasons,"source":self.data_source}
-        return {"signal":"WAIT","confidence":int(max(bp,sep)),"reason":"Mixed — skip candle","source":self.data_source}
 
-async def fetch_yahoo(pid):
-    sym=YAHOO_MAP.get(pid)
-    if not sym or not YFINANCE_OK: return None
+# ══════════════════════════════════════════════════════════
+# ANTI-BLOCKING SESSION
+# ══════════════════════════════════════════════════════════
+def _make_session() -> requests.Session:
+    """Return a requests.Session with browser-like headers to avoid blocks."""
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection":      "keep-alive",
+        "Cache-Control":   "no-cache",
+    })
+    return s
+
+
+# ══════════════════════════════════════════════════════════
+# DATA FETCHING — YAHOO FINANCE
+# ══════════════════════════════════════════════════════════
+def _parse_yahoo_json(data: dict) -> Optional[pd.DataFrame]:
+    """Parse Yahoo Finance chart JSON into a clean OHLC DataFrame."""
     try:
-        loop=asyncio.get_event_loop()
-        def _f():
-            t=yf.Ticker(sym); df=t.history(period="1d",interval="1m")
-            if df is None or df.empty: return None
-            r=[]
-            for _,row in df.iterrows():
-                if all(v==v for v in [row.Open,row.High,row.Low,row.Close]):
-                    r.append({"open":float(row.Open),"high":float(row.High),"low":float(row.Low),"close":float(row.Close)})
-            return r if len(r)>5 else None
-        return await loop.run_in_executor(None,_f)
-    except Exception as e:
-        logger.warning(f"Yahoo {pid}: {e}"); return None
+        result    = data["chart"]["result"][0]
+        ts        = result["timestamp"]
+        quote     = result["indicators"]["quote"][0]
+        df = pd.DataFrame(
+            {
+                "Open":  quote["open"],
+                "High":  quote["high"],
+                "Low":   quote["low"],
+                "Close": quote["close"],
+            },
+            index=pd.to_datetime(ts, unit="s", utc=True),
+        )
+        return df.dropna()
+    except Exception as exc:
+        log.debug(f"_parse_yahoo_json failed: {exc}")
+        return None
 
-async def fetch_binance(pid):
-    sym=BINANCE_MAP.get(pid)
-    if not sym: return None
+
+def fetch_yahoo_candles(symbol: str, limit: int = SEED_CANDLES) -> Optional[pd.DataFrame]:
+    """
+    Fetch 1-min OHLC from Yahoo Finance.
+    Attempt order: yfinance lib → query1 REST → query2 REST → None
+    """
+    # ── Attempt 1: yfinance with custom session ───────────
     try:
-        r=req_lib.get(f"https://api.binance.com/api/v3/klines?symbol={sym}&interval=1m&limit=100",timeout=8)
-        if r.status_code!=200: return None
-        return [{"open":float(c[1]),"high":float(c[2]),"low":float(c[3]),"close":float(c[4])} for c in r.json()]
-    except Exception as e:
-        logger.warning(f"Binance {pid}: {e}"); return None
+        sess   = _make_session()
+        ticker = yf.Ticker(symbol, session=sess)
+        df     = ticker.history(period="1d", interval="1m")
+        if df is not None and len(df) >= 10:
+            df = df[["Open", "High", "Low", "Close"]].dropna().tail(limit)
+            log.info(f"  ✓ yf   {symbol}: {len(df)} candles")
+            return df
+    except Exception as exc:
+        log.debug(f"  yf attempt failed {symbol}: {exc}")
 
-async def fetch_real(pid):
-    if pid in BINANCE_MAP: return await fetch_binance(pid)
-    return await fetch_yahoo(pid)
+    # ── Attempt 2: query1.finance.yahoo.com ──────────────
+    try:
+        sess = _make_session()
+        url  = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+            f"?interval=1m&range=1d"
+        )
+        r  = sess.get(url, timeout=12)
+        r.raise_for_status()
+        df = _parse_yahoo_json(r.json())
+        if df is not None and len(df) >= 10:
+            df = df.tail(limit)
+            log.info(f"  ✓ q1   {symbol}: {len(df)} candles")
+            return df
+    except Exception as exc:
+        log.debug(f"  query1 attempt failed {symbol}: {exc}")
 
-class DemoSim:
-    def __init__(self,base,pid):
-        self.price=base; self.trend=random.choice([-1,1])
-        is_jpy="JPY" in pid; is_crypto=pid in BINANCE_MAP
-        is_comm=pid in ("XAUUSD_otc","XAGUSD_otc","UKOIL_otc","USOIL_otc")
-        self.pip=0.01 if is_jpy else (10.0 if is_crypto else (0.1 if is_comm else 0.0001))
-        self.life=random.randint(5,20); self.tick=0
-    def next(self):
-        self.tick+=1
-        if self.tick%self.life==0: self.trend=-self.trend; self.life=random.randint(5,20)
-        d=self.trend*self.pip*0.3; v=self.pip*(2+random.random()*6)
-        o=self.price; c=o+d+(random.random()-0.5)*v
-        h=max(o,c)+abs(random.gauss(0,v*0.4)); l=min(o,c)-abs(random.gauss(0,v*0.4))
-        self.price=c
-        dp=2 if self.pip>=0.1 else (0 if self.pip>=5 else 5)
-        return {k:round(vv,dp) for k,vv in {"open":o,"high":h,"low":l,"close":c}.items()}
+    # ── Attempt 3: query2.finance.yahoo.com ──────────────
+    try:
+        sess = _make_session()
+        url  = (
+            f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}"
+            f"?interval=1m&range=1d"
+        )
+        r  = sess.get(url, timeout=12)
+        r.raise_for_status()
+        df = _parse_yahoo_json(r.json())
+        if df is not None and len(df) >= 10:
+            df = df.tail(limit)
+            log.info(f"  ✓ q2   {symbol}: {len(df)} candles")
+            return df
+    except Exception as exc:
+        log.debug(f"  query2 attempt failed {symbol}: {exc}")
 
-class ConnMgr:
-    def __init__(self): self.active:Set[WebSocket]=set()
-    async def connect(self,ws):
-        await ws.accept(); self.active.add(ws)
-        logger.info(f"WS +1 (total {len(self.active)})")
-    def disconnect(self,ws): self.active.discard(ws)
-    async def broadcast(self,data):
-        msg=json.dumps(data); dead=set()
-        for ws in list(self.active):
-            try: await ws.send_text(msg)
-            except: dead.add(ws)
-        for ws in dead: self.active.discard(ws)
+    log.warning(f"  ✗ All Yahoo attempts exhausted for {symbol}")
+    return None
 
-app=FastAPI(title="QX OTC Signal Bot v2.1")
-mgr=ConnMgr()
-engines:Dict[str,SignalEngine]={}
-sims:Dict[str,DemoSim]={}
-latest:Dict[str,dict]={}
-data_mode="REAL"
 
-app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_methods=["*"],allow_headers=["*"])
-for p in OTC_PAIRS:
-    engines[p["id"]]=SignalEngine(p["id"])
-    sims[p["id"]]=DemoSim(p["base_price"],p["id"])
+# ══════════════════════════════════════════════════════════
+# DATA FETCHING — BINANCE (crypto only)
+# ══════════════════════════════════════════════════════════
+def fetch_binance_candles(symbol: str, limit: int = SEED_CANDLES) -> Optional[pd.DataFrame]:
+    """Fetch 1-min klines from Binance public REST API (no API key needed)."""
+    try:
+        url = (
+            f"https://api.binance.com/api/v3/klines"
+            f"?symbol={symbol}&interval=1m&limit={limit}"
+        )
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        rows = r.json()
+        df = pd.DataFrame(
+            [
+                {
+                    "Open":  float(k[1]),
+                    "High":  float(k[2]),
+                    "Low":   float(k[3]),
+                    "Close": float(k[4]),
+                }
+                for k in rows
+            ]
+        )
+        if len(df) >= 10:
+            log.info(f"  ✓ bnb  {symbol}: {len(df)} candles")
+            return df
+    except Exception as exc:
+        log.warning(f"  ✗ Binance {symbol}: {exc}")
+    return None
 
-async def signal_loop():
-    global data_mode
-    logger.info(f"Signal loop start — {len(OTC_PAIRS)} pairs")
-    real_count=0
-    for p in OTC_PAIRS:
-        pid=p["id"]; eng=engines[pid]
-        candles=await fetch_real(pid)
-        if candles and len(candles)>=10:
-            eng.bulk_load(candles); eng.data_source="real"; real_count+=1
-            logger.info(f"REAL {pid}: {len(candles)} candles")
+
+# ══════════════════════════════════════════════════════════
+# DEMO FALLBACK SIMULATOR
+# Only used when ALL real-data fetches fail for a pair.
+# ══════════════════════════════════════════════════════════
+_DEMO_BASES = {
+    "EURUSD_otc": 1.0850,  "GBPUSD_otc": 1.2650,  "USDJPY_otc": 151.50,
+    "AUDUSD_otc": 0.6520,  "EURJPY_otc": 164.50,  "USDCAD_otc": 1.3600,
+    "EURGBP_otc": 0.8580,  "USDCHF_otc": 0.9050,  "AUDCAD_otc": 0.8950,
+    "EURAUD_otc": 1.6620,  "GBPJPY_otc": 191.80,  "CHFJPY_otc": 167.40,
+    "NZDCAD_otc": 0.8230,  "NZDCHF_otc": 0.5620,  "AUDCHF_otc": 0.5900,
+    "EURCHF_otc": 0.9780,  "CADJPY_otc": 111.40,  "GBPAUD_otc": 1.9380,
+    "GBPCAD_otc": 1.7180,  "EURCAD_otc": 1.4760,  "NZDUSD_otc": 0.6050,
+    "GBPCHF_otc": 1.1450,  "XAUUSD_otc": 2320.00, "XAGUSD_otc": 27.50,
+    "UKOIL_otc":  84.50,   "USOIL_otc":  81.20,   "BTCUSD_otc": 65000.0,
+    "ETHUSD_otc": 3200.0,
+}
+_JPY_PAIRS   = {"USDJPY_otc","EURJPY_otc","GBPJPY_otc","CHFJPY_otc","CADJPY_otc"}
+_LARGE_PAIRS = {"BTCUSD_otc","ETHUSD_otc","XAUUSD_otc"}
+_MID_PAIRS   = {"XAGUSD_otc","UKOIL_otc","USOIL_otc"}
+
+
+def _pip_size(pair_id: str) -> float:
+    if pair_id in _LARGE_PAIRS:  return 5.0
+    if pair_id in _MID_PAIRS:    return 0.05
+    if pair_id in _JPY_PAIRS:    return 0.05
+    return 0.0001
+
+
+def generate_demo_candles(pair_id: str, count: int = SEED_CANDLES) -> pd.DataFrame:
+    """Deterministic realistic OHLC simulator used only as last-resort fallback."""
+    base = _DEMO_BASES.get(pair_id, 1.0)
+    pip  = _pip_size(pair_id)
+    rng  = np.random.default_rng(seed=sum(ord(c) for c in pair_id))
+    rows = []
+    price = base
+    for _ in range(count):
+        move    = rng.normal(0, pip * 3)
+        open_p  = price
+        close_p = price + move
+        high_p  = max(open_p, close_p) + abs(rng.normal(0, pip * 0.8))
+        low_p   = min(open_p, close_p) - abs(rng.normal(0, pip * 0.8))
+        rows.append({"Open": open_p, "High": high_p, "Low": low_p, "Close": close_p})
+        price = close_p
+    return pd.DataFrame(rows)
+
+
+# ══════════════════════════════════════════════════════════
+# TECHNICAL INDICATORS
+# ══════════════════════════════════════════════════════════
+
+def _rsi(closes: pd.Series, period: int = 14) -> pd.Series:
+    """RSI using Wilder's EMA smoothing."""
+    delta    = closes.diff()
+    gain     = delta.clip(lower=0)
+    loss     = (-delta).clip(lower=0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    rs       = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+
+def _bollinger(closes: pd.Series, period: int = 20, n_std: float = 2.0):
+    """Bollinger Bands — returns (upper, mid, lower) Series."""
+    sma   = closes.rolling(period).mean()
+    std   = closes.rolling(period).std(ddof=0)
+    return sma + n_std * std, sma, sma - n_std * std
+
+
+def _stochastic(df: pd.DataFrame, k_period: int = 14, d_period: int = 3):
+    """Stochastic Oscillator — returns (%K, %D) Series."""
+    low_min  = df["Low"].rolling(k_period).min()
+    high_max = df["High"].rolling(k_period).max()
+    denom    = (high_max - low_min).replace(0, np.nan)
+    k        = 100 * (df["Close"] - low_min) / denom
+    d        = k.rolling(d_period).mean()
+    return k, d
+
+
+def _macd(closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """MACD — returns (macd_line, signal_line, histogram) Series."""
+    ema_fast    = closes.ewm(span=fast,   adjust=False).mean()
+    ema_slow    = closes.ewm(span=slow,   adjust=False).mean()
+    macd_line   = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line, macd_line - signal_line
+
+
+def _ema(closes: pd.Series, period: int) -> pd.Series:
+    return closes.ewm(span=period, adjust=False).mean()
+
+
+def _reversal_pattern(df: pd.DataFrame) -> Optional[str]:
+    """
+    OTC Exhaustion Reversal:
+    3 consecutive same-direction candles = momentum exhausted → expect flip.
+    Returns "BUY" (expect up), "SELL" (expect down), or None.
+    """
+    if len(df) < 4:
+        return None
+    tail = df.tail(4)
+    dirs = [
+        "bull" if row["Close"] >= row["Open"] else "bear"
+        for _, row in tail.iterrows()
+    ]
+    if dirs[-3:] == ["bear", "bear", "bear"]:
+        return "BUY"
+    if dirs[-3:] == ["bull", "bull", "bull"]:
+        return "SELL"
+    return None
+
+
+# ══════════════════════════════════════════════════════════
+# SIGNAL ENGINE  — 6-Indicator Weighted Voting
+# ══════════════════════════════════════════════════════════
+def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
+    """
+    Inputs : pair_id, DataFrame with Open/High/Low/Close columns
+    Output : {signal, confidence, reason, bull_pct, bear_pct,
+              data_source, price, candles, indicators}
+
+    Weights: RSI(3.0) + BB(3.0) + Stoch(2.5) + Reversal(2.5)
+             + MACD(2.0) + EMACross(1.5) = 14.5 total
+    Fire threshold: ≥60% weighted vote → BUY or SELL; else WAIT
+    """
+    _empty = {
+        "signal": "WAIT", "confidence": 0, "reason": "Insufficient data",
+        "bull_pct": 0, "bear_pct": 0, "data_source": data_mode.get(pair_id, "demo"),
+        "price": None, "candles": 0, "indicators": {},
+    }
+    if df is None or len(df) < MIN_CANDLES:
+        return _empty
+
+    closes      = df["Close"]
+    last_close  = float(closes.iloc[-1])
+    candle_cnt  = len(df)
+
+    # ── 1. RSI (14) — weight 3.0 ─────────────────────────
+    rsi_s  = _rsi(closes)
+    rsi    = float(rsi_s.iloc[-1])
+    rsi_v  = None
+    rsi_lbl = ""
+    if not np.isnan(rsi):
+        if rsi <= 30:
+            rsi_v, rsi_lbl = "BUY",  f"RSI oversold {rsi:.1f}"
+        elif rsi >= 70:
+            rsi_v, rsi_lbl = "SELL", f"RSI overbought {rsi:.1f}"
+
+    # ── 2. Bollinger Bands (20,2) — weight 3.0 ───────────
+    bb_up, _bb_mid, bb_lo = _bollinger(closes)
+    bb_u   = float(bb_up.iloc[-1])
+    bb_l   = float(bb_lo.iloc[-1])
+    bb_v   = None
+    bb_lbl = ""
+    if not (np.isnan(bb_u) or np.isnan(bb_l)):
+        if last_close <= bb_l:
+            bb_v, bb_lbl = "BUY",  f"BB lower {bb_l:.5g}"
+        elif last_close >= bb_u:
+            bb_v, bb_lbl = "SELL", f"BB upper {bb_u:.5g}"
+
+    # ── 3. Stochastic (14,3) — weight 2.5 ────────────────
+    k_s, d_s = _stochastic(df)
+    k_v  = float(k_s.iloc[-1])
+    d_v  = float(d_s.iloc[-1])
+    st_v = None
+    st_lbl = ""
+    if not (np.isnan(k_v) or np.isnan(d_v)):
+        if k_v < 20 and d_v < 20:
+            st_v, st_lbl = "BUY",  f"Stoch oversold K{k_v:.0f}/D{d_v:.0f}"
+        elif k_v > 80 and d_v > 80:
+            st_v, st_lbl = "SELL", f"Stoch overbought K{k_v:.0f}/D{d_v:.0f}"
+
+    # ── 4. OTC Reversal Pattern — weight 2.5 ─────────────
+    rev_v   = _reversal_pattern(df)
+    rev_lbl = "3-candle reversal" if rev_v else ""
+
+    # ── 5. MACD (12,26,9) — weight 2.0 ───────────────────
+    _ml, _sl, hist = _macd(closes)
+    h_curr = float(hist.iloc[-1])
+    h_prev = float(hist.iloc[-2]) if len(hist) > 1 else 0.0
+    mac_v  = None
+    mac_lbl = ""
+    if not (np.isnan(h_curr) or np.isnan(h_prev)):
+        if h_curr > 0 and h_prev <= 0:
+            mac_v, mac_lbl = "BUY",  "MACD crossed up"
+        elif h_curr < 0 and h_prev >= 0:
+            mac_v, mac_lbl = "SELL", "MACD crossed down"
+        elif h_curr > 0:
+            mac_v, mac_lbl = "BUY",  f"MACD bull hist"
+        elif h_curr < 0:
+            mac_v, mac_lbl = "SELL", f"MACD bear hist"
+
+    # ── 6. EMA Cross (9/21) — weight 1.5 ─────────────────
+    ema9  = float(_ema(closes,  9).iloc[-1])
+    ema21 = float(_ema(closes, 21).iloc[-1])
+    ema_v = None
+    ema_lbl = ""
+    if not (np.isnan(ema9) or np.isnan(ema21)):
+        if ema9 > ema21:
+            ema_v, ema_lbl = "BUY",  "EMA9 > EMA21"
+        elif ema9 < ema21:
+            ema_v, ema_lbl = "SELL", "EMA9 < EMA21"
+
+    # ── Weighted vote ─────────────────────────────────────
+    votes = [
+        (rsi_v, 3.0, rsi_lbl),
+        (bb_v,  3.0, bb_lbl),
+        (st_v,  2.5, st_lbl),
+        (rev_v, 2.5, rev_lbl),
+        (mac_v, 2.0, mac_lbl),
+        (ema_v, 1.5, ema_lbl),
+    ]
+    bull_w = sum(w for v, w, _ in votes if v == "BUY")
+    bear_w = sum(w for v, w, _ in votes if v == "SELL")
+    bull_p = round(bull_w / TOTAL_WEIGHT * 100, 1)
+    bear_p = round(bear_w / TOTAL_WEIGHT * 100, 1)
+
+    if bull_p >= SIGNAL_THRESH:
+        signal, conf = "BUY",  int(bull_p)
+    elif bear_p >= SIGNAL_THRESH:
+        signal, conf = "SELL", int(bear_p)
+    else:
+        signal, conf = "WAIT", int(max(bull_p, bear_p))
+
+    # Top-3 reason labels
+    active_labels = [lbl for v, _, lbl in votes if v in ("BUY", "SELL") and lbl]
+    reason = " | ".join(active_labels[:3]) if active_labels else "Mixed signals"
+
+    return {
+        "signal":     signal,
+        "confidence": conf,
+        "reason":     reason,
+        "bull_pct":   bull_p,
+        "bear_pct":   bear_p,
+        "data_source": data_mode.get(pair_id, "demo"),
+        "price":      last_close,
+        "candles":    candle_cnt,
+        "indicators": {
+            "rsi":       round(rsi,   2) if not np.isnan(rsi)   else None,
+            "bb_upper":  round(bb_u,  6) if not np.isnan(bb_u)  else None,
+            "bb_lower":  round(bb_l,  6) if not np.isnan(bb_l)  else None,
+            "stoch_k":   round(k_v,   2) if not np.isnan(k_v)   else None,
+            "stoch_d":   round(d_v,   2) if not np.isnan(d_v)   else None,
+            "macd_hist": round(h_curr, 8) if not np.isnan(h_curr) else None,
+            "ema9":      round(ema9,  6) if not np.isnan(ema9)  else None,
+            "ema21":     round(ema21, 6) if not np.isnan(ema21) else None,
+        },
+    }
+
+
+# ══════════════════════════════════════════════════════════
+# WEBSOCKET CONNECTION MANAGER
+# ══════════════════════════════════════════════════════════
+class ConnectionManager:
+    def __init__(self):
+        self.active: List[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.active.append(ws)
+        log.info(f"WS connect  (total={len(self.active)})")
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.active:
+            self.active.remove(ws)
+        log.info(f"WS disconnect (total={len(self.active)})")
+
+    async def broadcast(self, message: str):
+        dead = []
+        for ws in self.active:
+            try:
+                await ws.send_text(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+
+manager = ConnectionManager()
+
+
+# ══════════════════════════════════════════════════════════
+# PAIR SEEDING + REFRESH
+# ══════════════════════════════════════════════════════════
+def _fetch_pair_sync(pair_id: str, limit: int) -> Optional[pd.DataFrame]:
+    """Synchronous fetch — run via executor to avoid blocking the event loop."""
+    cfg = PAIRS[pair_id]
+    if cfg["source"] == "binance":
+        return fetch_binance_candles(cfg["symbol"], limit)
+    return fetch_yahoo_candles(cfg["symbol"], limit)
+
+
+async def _seed_one(pair_id: str) -> bool:
+    log.info(f"Seeding {pair_id} …")
+    df = await run_in_threadpool(_fetch_pair_sync, pair_id, SEED_CANDLES)
+    async with store_lock:
+        if df is not None and len(df) >= MIN_CANDLES:
+            price_store[pair_id] = df
+            data_mode[pair_id]   = "real"
+            return True
         else:
-            for _ in range(60):
-                c=sims[pid].next(); eng.add_candle(c["open"],c["high"],c["low"],c["close"])
-            eng.data_source="demo"
-            logger.info(f"DEMO fallback: {pid}")
-        await asyncio.sleep(0.5)
-    logger.info(f"Seeded {real_count}/{len(OTC_PAIRS)} with REAL data")
-    data_mode="REAL" if real_count>0 else "DEMO"
-    while True:
-        now=datetime.now(timezone.utc); sec_left=60-now.second
-        await asyncio.sleep(1)
-        payload=[]
-        for p in OTC_PAIRS:
-            pid=p["id"]; eng=engines[pid]
-            if now.second==0:
-                candles=await fetch_real(pid)
-                if candles and len(candles)>=2:
-                    lc=candles[-1]; eng.add_candle(lc["open"],lc["high"],lc["low"],lc["close"]); eng.data_source="real"
+            price_store[pair_id] = generate_demo_candles(pair_id, SEED_CANDLES)
+            data_mode[pair_id]   = "demo"
+            log.warning(f"  ⚠ {pair_id}: real fetch failed, using demo candles")
+            return False
+
+
+async def seed_all():
+    log.info("═══ Seeding all 28 pairs … ═══")
+    real = 0
+    for idx, pid in enumerate(PAIRS):
+        ok = await _seed_one(pid)
+        if ok:
+            real += 1
+        # Rate-limiting guard: brief sleep every 5 pairs
+        await asyncio.sleep(1.0 if (idx + 1) % 5 == 0 else 0.25)
+    log.info(f"═══ Seed complete: {real}/28 real, {28 - real}/28 demo ═══")
+
+
+async def refresh_all():
+    log.info("Refreshing candles …")
+    for idx, pid in enumerate(PAIRS):
+        df_new = await run_in_threadpool(_fetch_pair_sync, pid, 10)
+        if df_new is not None and len(df_new) >= 1:
+            async with store_lock:
+                existing = price_store[pid]
+                if existing is not None:
+                    combined        = pd.concat([existing, df_new]).drop_duplicates()
+                    price_store[pid] = combined.tail(MAX_CANDLES)
                 else:
-                    c=sims[pid].next(); eng.add_candle(c["open"],c["high"],c["low"],c["close"])
-                    if eng.data_source!="real": eng.data_source="demo"
-            sig=eng.generate_signal()
-            price=float(eng.closes[-1]) if eng.closes else p["base_price"]
-            rec={"pair_id":pid,"pair_name":p["name"],"category":p["category"],"payout":p["payout"],
-                 "signal":sig["signal"],"confidence":sig["confidence"],"reason":sig["reason"],
-                 "data_source":sig.get("source","?"),"price":price,"candles":len(eng.closes),
-                 "countdown":sec_left,"ts":now.isoformat()}
-            latest[pid]=rec; payload.append(rec)
-        await mgr.broadcast({"type":"signals","mode":data_mode,"data":payload,"server_time":now.isoformat()})
+                    price_store[pid] = df_new.tail(MAX_CANDLES)
+                data_mode[pid] = "real"
+        await asyncio.sleep(0.8 if (idx + 1) % 5 == 0 else 0.15)
+    log.info("Refresh done.")
+
+
+# ══════════════════════════════════════════════════════════
+# SIGNAL PAYLOAD BUILDER
+# ══════════════════════════════════════════════════════════
+async def build_payload() -> dict:
+    now       = datetime.now(timezone.utc)
+    countdown = 60 - now.second
+
+    items = []
+    async with store_lock:
+        for pid, cfg in PAIRS.items():
+            df  = price_store[pid]
+            sig = generate_signal(pid, df)
+            # price change %
+            if df is not None and len(df) > 1:
+                prev  = float(df["Close"].iloc[-2])
+                curr  = sig.get("price") or prev
+                chg   = (curr - prev) / prev * 100 if prev else 0.0
+            else:
+                chg = 0.0
+            items.append({
+                "pair_id":    pid,
+                "pair_name":  cfg["name"],
+                "category":   cfg["category"],
+                "payout":     cfg["payout"],
+                "signal":     sig["signal"],
+                "confidence": sig["confidence"],
+                "reason":     sig["reason"],
+                "bull_pct":   sig["bull_pct"],
+                "bear_pct":   sig["bear_pct"],
+                "data_source": sig["data_source"],
+                "price":      sig.get("price"),
+                "change_pct": round(chg, 4),
+                "candles":    sig.get("candles", 0),
+                "countdown":  countdown,
+                "indicators": sig.get("indicators", {}),
+                "ts":         now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            })
+
+    real_cnt = sum(1 for it in items if it["data_source"] == "real")
+    mode     = "REAL" if real_cnt >= 14 else "DEMO"
+
+    return {
+        "type":        "signals",
+        "mode":        mode,
+        "real_pairs":  real_cnt,
+        "demo_pairs":  len(items) - real_cnt,
+        "data":        items,
+        "server_time": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "countdown":   countdown,
+        "version":     VERSION,
+    }
+
+
+# ══════════════════════════════════════════════════════════
+# BACKGROUND TASKS
+# ══════════════════════════════════════════════════════════
+async def _refresh_loop():
+    await asyncio.sleep(REFRESH_SECS + 10)   # wait after startup seed
+    while True:
+        try:
+            await refresh_all()
+        except Exception as exc:
+            log.error(f"refresh_loop error: {exc}")
+        await asyncio.sleep(REFRESH_SECS)
+
+
+async def _broadcast_loop():
+    await asyncio.sleep(4)   # brief startup delay
+    while True:
+        try:
+            if manager.active:
+                payload = await build_payload()
+                await manager.broadcast(json.dumps(payload, default=str))
+        except Exception as exc:
+            log.error(f"broadcast_loop error: {exc}")
+        await asyncio.sleep(BROADCAST_SECS)
+
+
+# ══════════════════════════════════════════════════════════
+# FASTAPI APPLICATION
+# ══════════════════════════════════════════════════════════
+app = FastAPI(title="QX OTC Signal Bot", version=VERSION)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("startup")
-async def startup(): asyncio.create_task(signal_loop())
+async def _startup():
+    log.info(f"QX OTC Signal Bot v{VERSION} — startup")
+    asyncio.create_task(seed_all())
+    asyncio.create_task(_refresh_loop())
+    asyncio.create_task(_broadcast_loop())
+
 
 @app.get("/")
 async def root():
-    real=sum(1 for e in engines.values() if e.data_source=="real")
-    return {"status":"ok","mode":data_mode,"pairs":len(OTC_PAIRS),"real_data_pairs":real,"version":"2.1"}
+    real = sum(1 for v in data_mode.values() if v == "real")
+    return {
+        "name":       "QX OTC Signal Bot",
+        "version":    VERSION,
+        "status":     "running",
+        "mode":       "REAL" if real >= 14 else "DEMO",
+        "pairs":      len(PAIRS),
+        "real_pairs": real,
+        "demo_pairs": len(PAIRS) - real,
+        "ws_clients": len(manager.active),
+        "ws_url":     "/ws",
+        "signals_url": "/api/signals",
+    }
+
 
 @app.get("/api/status")
-async def status():
-    real=sum(1 for e in engines.values() if e.data_source=="real")
-    return {"status":"running","mode":data_mode,"real_data_pairs":real,"demo_fallback_pairs":len(OTC_PAIRS)-real,
-            "pairs":[p["name"] for p in OTC_PAIRS],"categories":{"Forex":22,"Commodity":4,"Crypto":2},"clients":len(mgr.active)}
+async def api_status():
+    real = sum(1 for v in data_mode.values() if v == "real")
+    pair_info = {}
+    async with store_lock:
+        for pid, df in price_store.items():
+            pair_info[pid] = {
+                "candles": len(df) if df is not None else 0,
+                "mode":    data_mode[pid],
+                "name":    PAIRS[pid]["name"],
+            }
+    return {
+        "status":     "ok",
+        "version":    VERSION,
+        "real_pairs": real,
+        "demo_pairs": len(PAIRS) - real,
+        "ws_clients": len(manager.active),
+        "pairs":      pair_info,
+    }
+
 
 @app.get("/api/signals")
-async def signals_ep(): return {"signals":list(latest.values())}
+async def api_signals():
+    """REST endpoint — returns latest signals for all 28 pairs."""
+    return await build_payload()
+
 
 @app.websocket("/ws")
-async def ws_ep(ws:WebSocket):
-    await mgr.connect(ws)
-    if latest:
-        await ws.send_text(json.dumps({"type":"signals","mode":data_mode,"data":list(latest.values()),"server_time":datetime.now(timezone.utc).isoformat()}))
+async def ws_endpoint(ws: WebSocket):
+    await manager.connect(ws)
     try:
-        while True: await ws.receive_text()
-    except (WebSocketDisconnect,Exception): mgr.disconnect(ws)
+        # Immediately send current signals on connect
+        payload = await build_payload()
+        await ws.send_text(json.dumps(payload, default=str))
+        # Keep connection alive; handle ping
+        while True:
+            try:
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
+                if msg.strip().lower() == "ping":
+                    await ws.send_text("pong")
+            except asyncio.TimeoutError:
+                pass   # healthy silence — broadcast loop handles updates
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        log.debug(f"ws_endpoint exception: {exc}")
+    finally:
+        manager.disconnect(ws)
 
-if __name__=="__main__":
-    uvicorn.run("server:app",host="0.0.0.0",port=PORT,reload=False)
+
+# ══════════════════════════════════════════════════════════
+# ENTRY POINT
+# ══════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")

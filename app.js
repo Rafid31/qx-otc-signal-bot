@@ -1,268 +1,495 @@
-const RAILWAY_URL = 'https://qx-otc-signal-bot-production.up.railway.app';
+/**
+ * QX OTC Signal Bot — Frontend App v2.0.0
+ * ==========================================
+ * - WebSocket connection with auto-reconnect every 3s
+ * - REST /api/signals fallback
+ * - All state in memory (no localStorage / sessionStorage)
+ * - Category tabs: All / Forex / Commodity / Crypto
+ * - Filter buttons: All / BUY / SELL
+ * - Signal cards with confidence bars, live price, reasons
+ * - History table (last 100 signals)
+ * - Countdown bar to next candle
+ * - Demo fallback via engine.js DemoEngineManager
+ */
 
-const OTC_PAIRS = [
-  // Forex
-  {id:'EURUSD_otc', name:'EUR/USD',  category:'Forex',     basePrice:1.08500,  payout:80},
-  {id:'GBPUSD_otc', name:'GBP/USD',  category:'Forex',     basePrice:1.26500,  payout:38},
-  {id:'USDJPY_otc', name:'USD/JPY',  category:'Forex',     basePrice:149.500,  payout:93},
-  {id:'AUDUSD_otc', name:'AUD/USD',  category:'Forex',     basePrice:0.65200,  payout:88},
-  {id:'EURJPY_otc', name:'EUR/JPY',  category:'Forex',     basePrice:161.800,  payout:85},
-  {id:'USDCAD_otc', name:'USD/CAD',  category:'Forex',     basePrice:1.36500,  payout:84},
-  {id:'EURGBP_otc', name:'EUR/GBP',  category:'Forex',     basePrice:0.85500,  payout:95},
-  {id:'USDCHF_otc', name:'USD/CHF',  category:'Forex',     basePrice:0.89500,  payout:85},
-  {id:'AUDCAD_otc', name:'AUD/CAD',  category:'Forex',     basePrice:0.89000,  payout:88},
-  {id:'EURAUD_otc', name:'EUR/AUD',  category:'Forex',     basePrice:1.65000,  payout:82},
-  {id:'GBPJPY_otc', name:'GBP/JPY',  category:'Forex',     basePrice:188.500,  payout:90},
-  {id:'CHFJPY_otc', name:'CHF/JPY',  category:'Forex',     basePrice:167.000,  payout:85},
-  {id:'NZDCAD_otc', name:'NZD/CAD',  category:'Forex',     basePrice:0.82000,  payout:87},
-  {id:'NZDCHF_otc', name:'NZD/CHF',  category:'Forex',     basePrice:0.52000,  payout:87},
-  {id:'AUDCHF_otc', name:'AUD/CHF',  category:'Forex',     basePrice:0.58000,  payout:86},
-  {id:'EURCHF_otc', name:'EUR/CHF',  category:'Forex',     basePrice:0.97000,  payout:78},
-  {id:'CADJPY_otc', name:'CAD/JPY',  category:'Forex',     basePrice:109.500,  payout:85},
-  {id:'GBPAUD_otc', name:'GBP/AUD',  category:'Forex',     basePrice:1.94000,  payout:83},
-  {id:'GBPCAD_otc', name:'GBP/CAD',  category:'Forex',     basePrice:1.73000,  payout:82},
-  {id:'EURCAD_otc', name:'EUR/CAD',  category:'Forex',     basePrice:1.48000,  payout:83},
-  {id:'NZDUSD_otc', name:'NZD/USD',  category:'Forex',     basePrice:0.60500,  payout:86},
-  {id:'GBPCHF_otc', name:'GBP/CHF',  category:'Forex',     basePrice:1.13500,  payout:84},
-  // Commodities
-  {id:'XAUUSD_otc', name:'Gold',     category:'Commodity', basePrice:2320.00,  payout:87},
-  {id:'XAGUSD_otc', name:'Silver',   category:'Commodity', basePrice:27.500,   payout:93},
-  {id:'UKOIL_otc',  name:'UK Brent', category:'Commodity', basePrice:85.500,   payout:93},
-  {id:'USOIL_otc',  name:'US Crude', category:'Commodity', basePrice:80.500,   payout:84},
-  // Crypto
-  {id:'BTCUSD_otc', name:'Bitcoin',  category:'Crypto',    basePrice:65000.00, payout:80},
-  {id:'ETHUSD_otc', name:'Ethereum', category:'Crypto',    basePrice:3500.00,  payout:66},
-];
+'use strict';
 
-// ── State ─────────────────────────────────────────────────────────────────────
-let ws, demoMode=false, signalHistory=[], totalSignals=0, demoInterval=null, demoSecond=0;
-let activeCategory='All', activeSignalFilter='All';
-const prevPrices={}, demoEngines={}, demoSims={};
-const latestSignals={};
+// ══════════════════════════════════════════════════════════
+// STATE — all in memory, never localStorage
+// ══════════════════════════════════════════════════════════
+const STATE = {
+  backendUrl:      '',
+  wsConn:          null,
+  wsReconnectTimer: null,
+  connected:       false,
+  mode:            'DEMO',        // 'REAL' | 'DEMO'
+  signals:         {},            // keyed by pair_id
+  history:         [],            // last 100 signal events
+  activeCategory:  'All',
+  activeFilter:    'All',
+  demoEngine:      null,
+  demoInterval:    null,
+  restInterval:    null,
+  signalCount:     0,
+  serverTime:      null,
+  countdown:       60,
+};
 
-// ── DOM ───────────────────────────────────────────────────────────────────────
-const $=id=>document.getElementById(id);
-const setupModal=$('setup-modal'), appEl=$('app');
-const backendInput=$('backend-url'), connectBtn=$('connect-btn'), demoBtnEl=$('demo-btn');
-const modeBadge=$('mode-badge'), connStatus=$('conn-status');
-const signalGrid=$('signal-grid'), historyBody=$('history-body');
-const totalEl=$('total-signals'), accuracyEl=$('accuracy-val');
-const countdownEl=$('countdown'), countdownFill=$('countdown-fill'), serverTimeEl=$('server-time');
+// ══════════════════════════════════════════════════════════
+// DOM REFS (cached after DOMContentLoaded)
+// ══════════════════════════════════════════════════════════
+const $ = id => document.getElementById(id);
 
-window.addEventListener('DOMContentLoaded', () => {
-  if (backendInput) backendInput.value = RAILWAY_URL;
-});
-
-// ── Tab controls ──────────────────────────────────────────────────────────────
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    activeCategory = btn.dataset.cat;
-    renderAllCards();
-  });
-});
-document.querySelectorAll('.filter-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
-    btn.classList.add('active');
-    activeSignalFilter = btn.dataset.sig;
-    renderAllCards();
-  });
-});
-
-// ── Setup ─────────────────────────────────────────────────────────────────────
-connectBtn.addEventListener('click', () => {
-  const url = backendInput.value.trim().replace(/\/$/,'');
-  if (!url) { backendInput.focus(); return; }
-  startLive(url);
-});
-demoBtnEl.addEventListener('click', () => { demoMode=true; startDemo(); });
-$('settings-btn').addEventListener('click', () => {
-  if(ws){ws.close();ws=null;} clearInterval(demoInterval);
-  appEl.classList.add('hidden'); setupModal.classList.remove('hidden');
-});
-$('clear-history').addEventListener('click', () => {
-  signalHistory=[]; totalSignals=0; renderHistory(); updateStats();
-});
-backendInput?.addEventListener('keydown', e=>{ if(e.key==='Enter') connectBtn.click(); });
-
-function launchApp(){
-  setupModal.classList.add('hidden'); appEl.classList.remove('hidden');
-  renderSkeletonCards();
+let DOM = {};
+function cacheDOM() {
+  DOM = {
+    setupModal:      $('setup-modal'),
+    backendInput:    $('backend-url-input'),
+    connectBtn:      $('connect-btn'),
+    demoBtn:         $('demo-btn'),
+    connectionDot:   $('connection-dot'),
+    connectionLabel: $('connection-label'),
+    modeBadge:       $('mode-badge'),
+    pairsCount:      $('pairs-count'),
+    signalsCount:    $('signals-count'),
+    countdownBar:    $('countdown-bar'),
+    countdownText:   $('countdown-text'),
+    liveClock:       $('live-clock'),
+    categoryTabs:    $('category-tabs'),
+    filterBtns:      $('filter-buttons'),
+    cardsGrid:       $('cards-grid'),
+    historyBody:     $('history-body'),
+    historyCount:    $('history-count'),
+    serverTimeEl:    $('server-time'),
+  };
 }
 
-// ── Live mode ─────────────────────────────────────────────────────────────────
-function startLive(url){
-  launchApp(); demoMode=false;
-  modeBadge.textContent='LIVE'; modeBadge.classList.add('live');
-  connectWS(url);
-}
-function connectWS(url){
-  setConn(false,'Connecting…');
-  const wsUrl = url.replace(/^http/,'ws')+'/ws';
-  try { ws=new WebSocket(wsUrl); } catch{ setConn(false,'Bad URL'); return; }
-  ws.onopen  = ()=>setConn(true,'Live');
-  ws.onclose = ()=>{ setConn(false,'Reconnecting…'); setTimeout(()=>{ if(!demoMode) connectWS(url); },3000); };
-  ws.onerror = ()=>setConn(false,'Error');
-  ws.onmessage=e=>{ try{ const m=JSON.parse(e.data); if(m.type==='signals') handleBatch(m.data,m.server_time); }catch{} };
+// ══════════════════════════════════════════════════════════
+// SETUP MODAL
+// ══════════════════════════════════════════════════════════
+function showModal() {
+  DOM.setupModal.classList.remove('hidden');
 }
 
-// ── Demo mode ─────────────────────────────────────────────────────────────────
-function startDemo(){
-  launchApp(); modeBadge.textContent='DEMO'; setConn(true,'Demo');
-  OTC_PAIRS.forEach(p=>{
-    demoEngines[p.id]=new SignalEngine(p.id);
-    demoSims[p.id]=new PriceSimulator(p.basePrice,p.id);
-    prevPrices[p.id]=p.basePrice;
-    for(let i=0;i<60;i++){ const c=demoSims[p.id].nextCandle(); demoEngines[p.id].addCandle(c.open,c.high,c.low,c.close); }
-  });
-  tickDemo(); demoInterval=setInterval(tickDemo,1000);
-}
-function tickDemo(){
-  demoSecond=(demoSecond+1)%60;
-  const signals=OTC_PAIRS.map(p=>{
-    const eng=demoEngines[p.id], sim=demoSims[p.id];
-    if(demoSecond===0){ const c=sim.nextCandle(); eng.addCandle(c.open,c.high,c.low,c.close); }
-    const sig=eng.generateSignal();
-    const price=eng.closes[eng.closes.length-1]||p.basePrice;
-    return {pair_id:p.id,pair_name:p.name,category:p.category,payout:p.payout,signal:sig.signal,confidence:sig.confidence,reason:sig.reason,price,candles:eng.closes.length,mode:'DEMO',countdown:60-demoSecond};
-  });
-  handleBatch(signals,new Date().toISOString());
+function hideModal() {
+  DOM.setupModal.classList.add('hidden');
 }
 
-// ── Signal handler ────────────────────────────────────────────────────────────
-function handleBatch(signals,serverTime){
-  if(serverTime) updateServerTime(serverTime);
-  signals.forEach(s=>{ latestSignals[s.pair_id]=s; });
-  renderAllCards();
-  const onBoundary=demoMode?(demoSecond===1):(signals[0]?.countdown>=58);
-  if(onBoundary){
-    signals.forEach(s=>{ if(s.signal!=='WAIT'){ signalHistory.unshift({...s,ts:serverTime||new Date().toISOString()}); if(signalHistory.length>200)signalHistory.pop(); totalSignals++; } });
-    renderHistory(); updateStats();
+function onConnectClick() {
+  let url = (DOM.backendInput.value || '').trim().replace(/\/$/, '');
+  if (!url) { alert('Please enter your Railway backend URL.'); return; }
+  if (!url.startsWith('http')) url = 'https://' + url;
+  STATE.backendUrl = url;
+  hideModal();
+  startRealMode(url);
+}
+
+function onDemoClick() {
+  hideModal();
+  startDemoMode();
+}
+
+// ══════════════════════════════════════════════════════════
+// WEBSOCKET — REAL MODE
+// ══════════════════════════════════════════════════════════
+function startRealMode(httpUrl) {
+  stopDemo();
+  const wsUrl = httpUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const proto  = httpUrl.startsWith('https') ? 'wss' : 'ws';
+  connectWS(`${proto}://${wsUrl}/ws`, httpUrl);
+}
+
+function connectWS(wsUrl, httpUrl) {
+  clearTimeout(STATE.wsReconnectTimer);
+  if (STATE.wsConn) {
+    try { STATE.wsConn.close(); } catch (_) {}
+    STATE.wsConn = null;
   }
-  updateCountdown(signals[0]?.countdown||60);
+
+  setConnectionStatus(false, 'Connecting…');
+
+  try {
+    const ws = new WebSocket(wsUrl);
+    STATE.wsConn = ws;
+
+    ws.onopen = () => {
+      setConnectionStatus(true, 'Connected');
+      clearInterval(STATE.restInterval);
+      // ping keepalive every 20s
+      STATE.pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) ws.send('ping');
+      }, 20000);
+    };
+
+    ws.onmessage = evt => {
+      try {
+        const data = JSON.parse(evt.data);
+        if (data === 'pong') return;
+        if (data.type === 'signals') handleSignalPayload(data);
+      } catch (_) {}
+    };
+
+    ws.onerror = () => {};
+
+    ws.onclose = () => {
+      clearInterval(STATE.pingInterval);
+      setConnectionStatus(false, 'Reconnecting…');
+      // REST fallback during reconnect
+      if (httpUrl && !STATE.restInterval) {
+        fetchRest(httpUrl);
+        STATE.restInterval = setInterval(() => fetchRest(httpUrl), 5000);
+      }
+      // Reconnect in 3s
+      STATE.wsReconnectTimer = setTimeout(() => {
+        connectWS(wsUrl, httpUrl);
+      }, 3000);
+    };
+  } catch (e) {
+    setConnectionStatus(false, 'Error');
+    STATE.wsReconnectTimer = setTimeout(() => connectWS(wsUrl, httpUrl), 3000);
+  }
 }
 
-// ── Render all cards (respecting active tab + filter) ─────────────────────────
-function renderAllCards(){
-  const pairs = OTC_PAIRS.filter(p=>{
-    const s=latestSignals[p.id];
-    const catOk = activeCategory==='All' || p.category===activeCategory;
-    const sigOk = activeSignalFilter==='All' || (s && s.signal===activeSignalFilter);
-    return catOk && sigOk;
-  });
-  // Update tab counts
-  ['Forex','Commodity','Crypto'].forEach(cat=>{
-    const el=document.getElementById(`count-${cat}`);
-    if(el) el.textContent = OTC_PAIRS.filter(p=>p.category===cat).length;
-  });
-  const allCount=document.getElementById('count-All');
-  if(allCount) allCount.textContent=OTC_PAIRS.length;
+async function fetchRest(httpUrl) {
+  try {
+    const r = await fetch(`${httpUrl}/api/signals`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data.type === 'signals') handleSignalPayload(data);
+  } catch (_) {}
+}
 
-  if(pairs.length===0){
-    signalGrid.innerHTML='<div style="color:var(--text-faint);padding:3rem;text-align:center;grid-column:1/-1">No signals matching filter</div>';
+// ══════════════════════════════════════════════════════════
+// DEMO MODE
+// ══════════════════════════════════════════════════════════
+function startDemoMode() {
+  stopRealMode();
+  setConnectionStatus(true, 'Demo Mode');
+  STATE.mode = 'DEMO';
+
+  if (!STATE.demoEngine) {
+    STATE.demoEngine = new DemoEngineManager();
+  }
+  // Initial render
+  renderDemoSignals();
+  // Advance simulator every 60s (new candle), re-render every second for countdown
+  STATE.demoInterval = setInterval(() => {
+    const now = new Date();
+    if (now.getSeconds() === 0) {
+      STATE.demoEngine.tick();
+      renderDemoSignals();
+    }
+    updateCountdown(60 - now.getSeconds());
+    updateClock();
+  }, 1000);
+}
+
+function renderDemoSignals() {
+  const items = STATE.demoEngine.generateAll();
+  const payload = {
+    type: 'signals', mode: 'DEMO',
+    real_pairs: 0, demo_pairs: items.length,
+    data: items,
+    server_time: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    countdown: 60 - new Date().getSeconds(),
+  };
+  handleSignalPayload(payload);
+}
+
+function stopDemo() {
+  clearInterval(STATE.demoInterval);
+  STATE.demoInterval = null;
+}
+
+function stopRealMode() {
+  clearTimeout(STATE.wsReconnectTimer);
+  clearInterval(STATE.restInterval);
+  clearInterval(STATE.pingInterval);
+  STATE.restInterval = null;
+  if (STATE.wsConn) {
+    try { STATE.wsConn.close(); } catch (_) {}
+    STATE.wsConn = null;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// SIGNAL PAYLOAD HANDLER
+// ══════════════════════════════════════════════════════════
+function handleSignalPayload(payload) {
+  STATE.mode       = payload.mode || 'DEMO';
+  STATE.serverTime = payload.server_time;
+  STATE.countdown  = payload.countdown || (60 - new Date().getSeconds());
+
+  const prev = { ...STATE.signals };
+
+  for (const item of payload.data) {
+    const old = prev[item.pair_id];
+    STATE.signals[item.pair_id] = item;
+    // Only add to history if signal is BUY or SELL and changed
+    if (item.signal !== 'WAIT') {
+      const hasChanged = !old || old.signal !== item.signal || old.confidence !== item.confidence;
+      if (hasChanged) {
+        STATE.history.unshift({ ...item, recorded: new Date().toISOString() });
+        if (STATE.history.length > 100) STATE.history.pop();
+        STATE.signalCount++;
+      }
+    }
+  }
+
+  renderAll();
+}
+
+// ══════════════════════════════════════════════════════════
+// RENDERING
+// ══════════════════════════════════════════════════════════
+function renderAll() {
+  updateHeader();
+  updateCountdown(STATE.countdown);
+  updateClock();
+  renderCards();
+  renderHistory();
+}
+
+function updateHeader() {
+  DOM.modeBadge.textContent = STATE.mode;
+  DOM.modeBadge.className   = 'mode-badge ' + (STATE.mode === 'REAL' ? 'real' : 'demo');
+  const all = Object.values(STATE.signals);
+  DOM.pairsCount.textContent   = all.length;
+  DOM.signalsCount.textContent = STATE.signalCount;
+  if (STATE.serverTime) DOM.serverTimeEl.textContent = formatTime(STATE.serverTime);
+}
+
+function updateCountdown(secs) {
+  STATE.countdown = secs;
+  const pct = (secs / 60) * 100;
+  DOM.countdownBar.style.width  = pct + '%';
+  DOM.countdownText.textContent = `Next candle in ${secs}s`;
+  // Colour shift: green when far, amber when close
+  DOM.countdownBar.className = 'countdown-fill' + (secs <= 10 ? ' urgent' : secs <= 20 ? ' warning' : '');
+}
+
+function updateClock() {
+  DOM.liveClock.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+}
+
+// ── Cards ─────────────────────────────────────────────────
+function renderCards() {
+  const category = STATE.activeCategory;
+  const filter   = STATE.activeFilter;
+  let items      = Object.values(STATE.signals);
+
+  if (category !== 'All') {
+    items = items.filter(s => s.category === category);
+  }
+  if (filter !== 'All') {
+    items = items.filter(s => s.signal === filter);
+  }
+
+  // Sort: BUY first, then SELL, then WAIT; then by confidence desc
+  items.sort((a, b) => {
+    const order = { BUY: 0, SELL: 1, WAIT: 2 };
+    const oa = order[a.signal] ?? 3;
+    const ob = order[b.signal] ?? 3;
+    if (oa !== ob) return oa - ob;
+    return b.confidence - a.confidence;
+  });
+
+  DOM.cardsGrid.innerHTML = items.map(buildCard).join('');
+
+  // Update count badges in tabs
+  const allItems = Object.values(STATE.signals);
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const cat   = btn.dataset.category;
+    const count = cat === 'All'
+      ? allItems.length
+      : allItems.filter(s => s.category === cat).length;
+    const badge = btn.querySelector('.tab-count');
+    if (badge) badge.textContent = count;
+  });
+}
+
+function buildCard(s) {
+  const signalClass = s.signal === 'BUY' ? 'buy' : s.signal === 'SELL' ? 'sell' : 'wait';
+  const signalIcon  = s.signal === 'BUY' ? '▲' : s.signal === 'SELL' ? '▼' : '◆';
+  const catClass    = s.category === 'Forex' ? 'cat-forex'
+                    : s.category === 'Commodity' ? 'cat-commodity' : 'cat-crypto';
+  const srcIcon     = s.data_source === 'real' ? '🟢' : '🟡';
+  const srcLabel    = s.data_source === 'real' ? 'REAL' : 'DEMO';
+  const priceStr    = formatPrice(s.price, s.pair_id);
+  const chgSign     = s.change_pct > 0 ? '+' : '';
+  const chgClass    = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
+  const chgArrow    = s.change_pct > 0 ? '↑' : s.change_pct < 0 ? '↓' : '';
+  const reasons     = (s.reason || '').split(' | ').slice(0, 3);
+
+  return `
+<div class="signal-card ${signalClass}" data-pair="${s.pair_id}">
+  <div class="card-header">
+    <div class="card-left">
+      <span class="pair-name">${s.pair_name}</span>
+      <span class="cat-badge ${catClass}">${s.category}</span>
+    </div>
+    <div class="signal-badge ${signalClass}">
+      <span class="signal-icon">${signalIcon}</span>
+      <span class="signal-text">${s.signal}</span>
+    </div>
+  </div>
+
+  <div class="confidence-row">
+    <span class="conf-label">Confidence</span>
+    <span class="conf-value">${s.confidence}%</span>
+  </div>
+  <div class="confidence-track">
+    <div class="confidence-bar ${signalClass}" style="width:${s.confidence}%"></div>
+  </div>
+  <div class="vote-row">
+    <span class="vote-bull">▲ ${s.bull_pct ?? 0}%</span>
+    <span class="vote-bear">▼ ${s.bear_pct ?? 0}%</span>
+  </div>
+
+  <div class="price-row">
+    <span class="price-value">${priceStr}</span>
+    <span class="price-change ${chgClass}">${chgArrow} ${chgSign}${(s.change_pct || 0).toFixed(3)}%</span>
+  </div>
+
+  <div class="reasons-list">
+    ${reasons.map(r => `<div class="reason-tag">${r}</div>`).join('')}
+  </div>
+
+  <div class="card-footer">
+    <span class="data-source-badge">${srcIcon} ${srcLabel}</span>
+    <span class="payout-badge">Payout <strong>${s.payout}%</strong></span>
+    <span class="candles-info">${s.candles || 0} candles</span>
+  </div>
+</div>`;
+}
+
+// ── History ───────────────────────────────────────────────
+function renderHistory() {
+  DOM.historyCount.textContent = STATE.history.length;
+  if (!STATE.history.length) {
+    DOM.historyBody.innerHTML = `<tr><td colspan="8" class="no-data">No signals yet — waiting for BUY or SELL…</td></tr>`;
     return;
   }
-  pairs.forEach(p=>{
-    const data=latestSignals[p.id];
-    if(data) renderCard(data); else renderSkeletonCard(p.id,p.name,p.category);
-  });
-  // Remove cards not in current filter
-  document.querySelectorAll('.signal-card').forEach(card=>{
-    const pid=card.id.replace('card-','');
-    if(!pairs.find(p=>p.id===pid)) card.remove();
-  });
-}
-
-function renderSkeletonCards(){
-  signalGrid.innerHTML = OTC_PAIRS.map(p=>`
-    <div class="signal-card" id="card-${p.id}">
-      <div class="card-header">
-        <div class="pair-info"><div class="pair-name">${p.name}</div><div class="candle-count">${p.category}</div></div>
-        <div class="skeleton" style="width:72px;height:30px;border-radius:999px"></div>
-      </div>
-      <div class="skeleton" style="height:6px;border-radius:999px"></div>
-      <div class="skeleton" style="height:20px;width:50%"></div>
-    </div>`).join('');
-}
-
-function renderSkeletonCard(pid,name,category){
-  let card=document.getElementById(`card-${pid}`);
-  if(!card){ card=document.createElement('div'); card.id=`card-${pid}`; signalGrid.appendChild(card); }
-  card.className='signal-card';
-  card.innerHTML=`<div class="card-header"><div class="pair-info"><div class="pair-name">${name}</div><div class="candle-count skeleton" style="width:60px;height:10px"></div></div><div class="skeleton" style="width:72px;height:30px;border-radius:999px"></div></div><div class="skeleton" style="height:6px"></div>`;
-}
-
-function renderCard(data){
-  const {pair_id,pair_name,category,payout,signal,confidence,reason,price,candles}=data;
-  let card=document.getElementById(`card-${pair_id}`);
-  if(!card){ card=document.createElement('div'); card.id=`card-${pair_id}`; signalGrid.appendChild(card); }
-  const p=OTC_PAIRS.find(x=>x.id===pair_id);
-  const prev=prevPrices[pair_id]??price;
-  const diff=price-prev; prevPrices[pair_id]=price;
-  const chDir=diff>=0?'up':'down'; const chSym=diff>=0?'▲':'▼';
-  const dp=(['USDJPY_otc','EURJPY_otc','GBPJPY_otc','CHFJPY_otc','CADJPY_otc'].includes(pair_id))?3:(['XAUUSD_otc','UKOIL_otc','USOIL_otc'].includes(pair_id))?2:(['BTCUSD_otc'].includes(pair_id))?0:(['ETHUSD_otc','XAGUSD_otc'].includes(pair_id))?2:5;
-  const icon=signal==='BUY'?'▲':signal==='SELL'?'▼':'◆';
-  card.className=`signal-card ${signal.toLowerCase()}`;
-  card.innerHTML=`
-    <div class="card-header">
-      <div class="pair-info">
-        <div class="pair-name">${pair_name}</div>
-        <div style="display:flex;gap:6px;align-items:center;margin-top:3px">
-          <span class="cat-badge cat-${category}">${category}</span>
-          <span class="candle-count">${candles} candles</span>
-        </div>
-      </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-        <div class="signal-badge ${signal}"><span>${icon}</span>${signal}</div>
-        <div class="payout-badge">Payout <span>${payout}%</span></div>
-      </div>
-    </div>
-    <div class="confidence-row">
-      <span class="confidence-label">Confidence</span>
-      <div class="confidence-track"><div class="confidence-fill ${signal}" style="width:${confidence}%"></div></div>
-      <span class="confidence-val">${confidence}%</span>
-    </div>
-    <div class="price-row">
-      <span class="price-val">${price.toFixed(dp)}</span>
-      <span class="price-change ${chDir}">${chSym} ${Math.abs(diff).toFixed(dp)}</span>
-    </div>
-    <div class="reason-row">${reason}</div>`;
-}
-
-// ── History ───────────────────────────────────────────────────────────────────
-function renderHistory(){
-  if(!signalHistory.length){ historyBody.innerHTML=`<tr class="empty-row"><td colspan="8">No signals yet…</td></tr>`; return; }
-  historyBody.innerHTML=signalHistory.slice(0,100).map(s=>{
-    const pid=s.pair_id||'';
-    const dp=['USDJPY_otc','EURJPY_otc','GBPJPY_otc','CHFJPY_otc','CADJPY_otc'].includes(pid)?3:['XAUUSD_otc','UKOIL_otc','USOIL_otc'].includes(pid)?2:['BTCUSD_otc'].includes(pid)?0:['ETHUSD_otc','XAGUSD_otc'].includes(pid)?2:5;
-    const time=new Date(s.ts).toLocaleTimeString();
-    return `<tr>
-      <td>${time}</td>
-      <td><b>${s.pair_name}</b></td>
-      <td><span class="cat-badge cat-${s.category||'Forex'}">${s.category||'Forex'}</span></td>
-      <td><span class="sig-tag ${s.signal}">${s.signal==='BUY'?'▲ ':'▼ '}${s.signal}</span></td>
-      <td><div class="conf-bar ${s.signal}"><div class="conf-mini"><div class="conf-mini-fill" style="width:${s.confidence}%"></div></div><span class="conf-num">${s.confidence}%</span></div></td>
-      <td style="color:var(--accent);font-family:var(--font-mono)">${s.payout||'—'}%</td>
-      <td style="font-family:var(--font-mono)">${(+s.price).toFixed(dp)}</td>
-      <td style="color:var(--text-muted);max-width:220px;overflow:hidden;text-overflow:ellipsis">${s.reason}</td>
-    </tr>`;
+  DOM.historyBody.innerHTML = STATE.history.slice(0, 100).map(s => {
+    const signalClass = s.signal === 'BUY' ? 'buy' : 'sell';
+    const icon        = s.signal === 'BUY' ? '▲' : '▼';
+    return `
+<tr>
+  <td class="mono">${formatTime(s.ts)}</td>
+  <td><strong>${s.pair_name}</strong></td>
+  <td><span class="cat-badge cat-${s.category.toLowerCase()}">${s.category}</span></td>
+  <td><span class="signal-badge-sm ${signalClass}">${icon} ${s.signal}</span></td>
+  <td>${s.confidence}%</td>
+  <td>${s.payout}%</td>
+  <td class="mono">${formatPrice(s.price, s.pair_id)}</td>
+  <td class="reason-cell" title="${s.reason}">${(s.reason || '').substring(0, 40)}…</td>
+</tr>`;
   }).join('');
 }
 
-function updateStats(){
-  totalEl.textContent=totalSignals;
-  if($('pair-count')) $('pair-count').textContent=OTC_PAIRS.length;
-  accuracyEl.textContent=totalSignals>0?`${Math.round((totalSignals*0.78))}/${totalSignals}`:'—';
+// ══════════════════════════════════════════════════════════
+// UI INTERACTIONS
+// ══════════════════════════════════════════════════════════
+function initTabs() {
+  const tabs = [
+    { id:'All',       label:'All',       count: 28 },
+    { id:'Forex',     label:'Forex',     count: 22 },
+    { id:'Commodity', label:'Commodity', count:  4 },
+    { id:'Crypto',    label:'Crypto',    count:  2 },
+  ];
+  DOM.categoryTabs.innerHTML = tabs.map(t => `
+<button class="tab-btn ${t.id === 'All' ? 'active' : ''}" data-category="${t.id}">
+  ${t.label} <span class="tab-count">${t.count}</span>
+</button>`).join('');
+
+  DOM.categoryTabs.addEventListener('click', e => {
+    const btn = e.target.closest('.tab-btn');
+    if (!btn) return;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    STATE.activeCategory = btn.dataset.category;
+    renderCards();
+  });
 }
-function updateCountdown(s){
-  if(countdownEl) countdownEl.textContent=`${s}s`;
-  if(countdownFill) countdownFill.style.width=`${(s/60)*100}%`;
+
+function initFilterButtons() {
+  const filters = [
+    { id:'All',  label:'All Signals' },
+    { id:'BUY',  label:'▲ BUY Only'  },
+    { id:'SELL', label:'▼ SELL Only' },
+  ];
+  DOM.filterBtns.innerHTML = filters.map(f => `
+<button class="filter-btn ${f.id === 'All' ? 'active' : ''}" data-filter="${f.id}">
+  ${f.label}
+</button>`).join('');
+
+  DOM.filterBtns.addEventListener('click', e => {
+    const btn = e.target.closest('.filter-btn');
+    if (!btn) return;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    STATE.activeFilter = btn.dataset.filter;
+    renderCards();
+  });
 }
-function updateServerTime(iso){ try{ if(serverTimeEl) serverTimeEl.textContent=new Date(iso).toLocaleTimeString(); }catch{} }
-function setConn(ok,label){
-  connStatus.className=`conn-badge ${ok?'connected':'disconnected'}`;
-  connStatus.innerHTML=`<span class="conn-dot"></span><span>${label}</span>`;
+
+// ══════════════════════════════════════════════════════════
+// CONNECTION STATUS
+// ══════════════════════════════════════════════════════════
+function setConnectionStatus(connected, label) {
+  STATE.connected = connected;
+  DOM.connectionDot.className    = 'conn-dot ' + (connected ? 'connected' : 'disconnected');
+  DOM.connectionLabel.textContent = label;
 }
-setInterval(()=>{ if(serverTimeEl&&demoMode) serverTimeEl.textContent=new Date().toLocaleTimeString(); },1000);
+
+// ══════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════
+const _JPY_PAIRS_JS   = new Set(['USDJPY_otc','EURJPY_otc','GBPJPY_otc','CHFJPY_otc','CADJPY_otc']);
+const _LARGE_PAIRS_JS = new Set(['BTCUSD_otc','ETHUSD_otc','XAUUSD_otc']);
+const _MID_PAIRS_JS   = new Set(['XAGUSD_otc','UKOIL_otc','USOIL_otc']);
+
+function formatPrice(price, pairId) {
+  if (price == null || isNaN(price)) return '—';
+  if (_LARGE_PAIRS_JS.has(pairId))  return price.toFixed(2);
+  if (_MID_PAIRS_JS.has(pairId))    return price.toFixed(3);
+  if (_JPY_PAIRS_JS.has(pairId))    return price.toFixed(3);
+  return price.toFixed(5);
+}
+
+function formatTime(isoStr) {
+  if (!isoStr) return '';
+  try {
+    return new Date(isoStr).toLocaleTimeString('en-GB', { hour12: false });
+  } catch (_) { return isoStr; }
+}
+
+// Countdown tick — runs every second independently of WS
+function startCountdownTick() {
+  setInterval(() => {
+    const secs = 60 - new Date().getSeconds();
+    updateCountdown(secs);
+    updateClock();
+  }, 1000);
+}
+
+// ══════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  cacheDOM();
+  initTabs();
+  initFilterButtons();
+  startCountdownTick();
+  showModal();
+
+  DOM.connectBtn.addEventListener('click', onConnectClick);
+  DOM.demoBtn.addEventListener('click',    onDemoClick);
+
+  DOM.backendInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') onConnectClick();
+  });
+
+  // Render empty grid placeholder immediately
+  renderCards();
+});

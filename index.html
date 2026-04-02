@@ -1,102 +1,196 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="QX OTC Signal Bot — Real-time trading signals for all 28 QX Broker OTC pairs using live Yahoo Finance and Binance data." />
   <title>QX OTC Signal Bot</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
-  <link rel="stylesheet" href="style.css"/>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📈</text></svg>" />
 </head>
 <body>
 
-<!-- SETUP MODAL -->
-<div id="setup-modal" class="modal-overlay">
+<!-- ══════════════════════════════════════════════════════
+     SETUP MODAL
+     ══════════════════════════════════════════════════════ -->
+<div id="setup-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
   <div class="modal-box">
+
     <div class="modal-logo">
-      <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-        <rect width="40" height="40" rx="10" fill="#00c896"/>
-        <path d="M10 28 L20 12 L30 28" stroke="#0a0f0d" stroke-width="3" stroke-linejoin="round" fill="none"/>
-        <circle cx="20" cy="20" r="3" fill="#0a0f0d"/>
-      </svg>
-      <span>QX Signal Bot</span>
+      <div class="modal-logo-icon">📈</div>
+      <div class="modal-logo-text">
+        <h1>QX OTC Signal Bot</h1>
+        <p>Real-time OTC trading signals · 28 pairs · 6 indicators</p>
+      </div>
     </div>
-    <h2>Connect to Backend</h2>
-    <p>Enter your Railway backend URL to receive real-time OTC signals for all 28 pairs.</p>
-    <div class="form-group">
-      <label for="backend-url">Railway Backend URL</label>
-      <input type="text" id="backend-url" placeholder="https://your-app.up.railway.app" autocomplete="off" spellcheck="false"/>
-      <span class="hint">Example: https://qx-otc-signal-bot-production.up.railway.app</span>
+
+    <h2 id="modal-title">Connect to your backend</h2>
+    <p>Paste your Railway deployment URL to receive live signals via WebSocket. Real data from Yahoo Finance + Binance — never simulated.</p>
+
+    <label for="backend-url-input">Railway Backend URL</label>
+    <input
+      id="backend-url-input"
+      type="url"
+      placeholder="https://qx-otc-signal-bot-production.up.railway.app"
+      autocomplete="off"
+      spellcheck="false"
+    />
+
+    <div class="modal-btn-row">
+      <button id="connect-btn" class="btn-primary">⚡ Connect (REAL data)</button>
     </div>
-    <button id="connect-btn" class="btn-primary">⚡ Connect &amp; Start</button>
-    <p class="demo-note">No backend? <button id="demo-btn" class="link-btn">Run Demo Mode</button></p>
+
+    <div class="modal-divider">or</div>
+
+    <button id="demo-btn" class="btn-secondary" style="width:100%">
+      🎮 Try Demo Mode (simulated prices)
+    </button>
+
+    <p style="margin-top:14px; font-size:0.75rem; color: var(--text-muted);">
+      ⚠️ Demo mode uses a realistic price simulator — <strong>not real market data</strong>.
+      For real signals, deploy the backend to Railway first.
+    </p>
   </div>
 </div>
 
-<!-- MAIN APP -->
-<div id="app" class="hidden">
-  <header class="app-header">
-    <div class="header-left">
-      <svg width="32" height="32" viewBox="0 0 40 40" fill="none">
-        <rect width="40" height="40" rx="10" fill="#00c896"/>
-        <path d="M10 28 L20 12 L30 28" stroke="#0a0f0d" stroke-width="3" stroke-linejoin="round" fill="none"/>
-        <circle cx="20" cy="20" r="3" fill="#0a0f0d"/>
-      </svg>
-      <div>
-        <h1>QX OTC Signal Bot</h1>
-        <span id="mode-badge" class="mode-badge">DEMO</span>
+<!-- ══════════════════════════════════════════════════════
+     HEADER
+     ══════════════════════════════════════════════════════ -->
+<header id="app-header">
+  <div class="header-left">
+    <a href="#" class="logo" aria-label="QX OTC Signal Bot">
+      <div class="logo-icon">📈</div>
+      <span class="logo-name">QX <span>OTC</span> Signal Bot</span>
+    </a>
+    <span id="mode-badge" class="mode-badge demo">DEMO</span>
+  </div>
+
+  <div class="header-stats" aria-label="Statistics">
+    <div class="stat-item" title="Total OTC pairs">
+      <span class="stat-label">Pairs</span>
+      <span class="stat-value" id="pairs-count">0</span>
+    </div>
+    <div class="stat-item" title="BUY/SELL signals fired this session">
+      <span class="stat-label">Signals</span>
+      <span class="stat-value" id="signals-count">0</span>
+    </div>
+  </div>
+
+  <div class="header-right">
+    <div>
+      <div class="live-clock" id="live-clock" aria-label="Current time">--:--:--</div>
+      <div class="server-time-row">Server: <span id="server-time">—</span></div>
+    </div>
+    <div class="conn-indicator" aria-live="polite">
+      <span id="connection-dot" class="conn-dot disconnected"></span>
+      <span id="connection-label" class="conn-label">Not connected</span>
+    </div>
+  </div>
+</header>
+
+<!-- ══════════════════════════════════════════════════════
+     COUNTDOWN BAR
+     ══════════════════════════════════════════════════════ -->
+<div id="countdown-wrapper" aria-label="Next candle countdown">
+  <div class="countdown-track">
+    <div id="countdown-bar" class="countdown-fill" style="width:100%"></div>
+  </div>
+  <div class="countdown-label-row">
+    <span id="countdown-text" class="countdown-text">Next candle in 60s</span>
+    <span class="signal-note">⚡ Signal = NEXT candle. Wait for current candle to CLOSE before placing trade.</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     MAIN CONTENT
+     ══════════════════════════════════════════════════════ -->
+<main id="main-content">
+
+  <!-- How-to instruction banner -->
+  <div class="instruction-banner" role="note">
+    <span class="instruction-icon">💡</span>
+    <span class="instruction-text">
+      <strong>How to use:</strong>
+      When you see a <strong>BUY</strong> signal, wait for the <em>current</em> 1-min candle to fully close, then click
+      <strong>HIGHER</strong> on QX Broker for the next candle.
+      For <strong>SELL</strong>, click <strong>LOWER</strong>.
+      <strong>WAIT</strong> means indicators are mixed — skip that candle.
+    </span>
+  </div>
+
+  <!-- Controls: category tabs + filter buttons -->
+  <div class="controls-row">
+    <nav id="category-tabs" aria-label="Category filter"></nav>
+    <div id="filter-buttons" role="group" aria-label="Signal filter"></div>
+  </div>
+
+  <!-- Signal cards grid -->
+  <section id="cards-section" aria-label="Signal cards">
+    <div id="cards-grid">
+      <!-- Cards injected by app.js -->
+      <div style="grid-column:1/-1; text-align:center; padding:48px; color:var(--text-muted);">
+        <div style="font-size:2rem; margin-bottom:12px;">📡</div>
+        <div style="font-size:0.9rem;">Waiting for signals…</div>
+        <div style="font-size:0.78rem; margin-top:6px; color:var(--text-muted);">Connect to your backend or start demo mode.</div>
       </div>
     </div>
-    <div class="header-right">
-      <div class="stat-pill"><span class="stat-label">Pairs</span><span id="pair-count" class="stat-val">28</span></div>
-      <div class="stat-pill"><span class="stat-label">Signals</span><span id="total-signals" class="stat-val">0</span></div>
-      <div class="stat-pill"><span class="stat-label">Accuracy</span><span id="accuracy-val" class="stat-val accent">—</span></div>
-      <div id="conn-status" class="conn-badge disconnected"><span class="conn-dot"></span><span>Connecting…</span></div>
-      <button id="settings-btn" class="icon-btn" aria-label="Settings">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      </button>
-    </div>
-  </header>
+  </section>
 
-  <div class="countdown-bar">
-    <span class="countdown-label">Next candle in</span>
-    <span id="countdown" class="countdown-val">60s</span>
-    <div class="countdown-track"><div id="countdown-fill" class="countdown-fill"></div></div>
-    <span id="server-time" class="server-time">--:--:--</span>
-  </div>
-
-  <!-- Category Tabs -->
-  <div class="tabs-bar">
-    <button class="tab-btn active" data-cat="All">All Pairs <span class="tab-count" id="count-All">28</span></button>
-    <button class="tab-btn" data-cat="Forex">Forex <span class="tab-count" id="count-Forex">22</span></button>
-    <button class="tab-btn" data-cat="Commodity">Commodities <span class="tab-count" id="count-Commodity">4</span></button>
-    <button class="tab-btn" data-cat="Crypto">Crypto <span class="tab-count" id="count-Crypto">2</span></button>
-    <div class="tab-filter">
-      <button class="filter-btn active" data-sig="All">All</button>
-      <button class="filter-btn buy-filter" data-sig="BUY">▲ BUY</button>
-      <button class="filter-btn sell-filter" data-sig="SELL">▼ SELL</button>
-    </div>
-  </div>
-
-  <main class="signal-grid" id="signal-grid"></main>
-
-  <!-- History -->
-  <section class="history-section">
-    <div class="history-header">
-      <h2>Signal History</h2>
-      <button id="clear-history" class="ghost-btn">Clear</button>
-    </div>
-    <div class="history-table-wrap">
-      <table class="history-table">
-        <thead><tr><th>Time</th><th>Pair</th><th>Category</th><th>Signal</th><th>Confidence</th><th>Payout</th><th>Price</th><th>Reason</th></tr></thead>
-        <tbody id="history-body"><tr class="empty-row"><td colspan="8">No signals yet…</td></tr></tbody>
+  <!-- Signal history -->
+  <section id="history-section" aria-label="Signal history">
+    <h2 class="section-title">
+      Signal History
+      <span class="count-badge" id="history-count">0</span>
+      <span style="font-size:0.72rem; color:var(--text-muted); font-weight:400;">(last 100 BUY/SELL signals)</span>
+    </h2>
+    <div class="table-wrapper">
+      <table aria-label="Signal history table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Pair</th>
+            <th>Category</th>
+            <th>Signal</th>
+            <th>Conf.</th>
+            <th>Payout</th>
+            <th>Price</th>
+            <th>Top Reasons</th>
+          </tr>
+        </thead>
+        <tbody id="history-body">
+          <tr>
+            <td colspan="8" class="no-data">No signals yet — waiting for BUY or SELL…</td>
+          </tr>
+        </tbody>
       </table>
     </div>
   </section>
-</div>
 
+</main>
+
+<!-- ══════════════════════════════════════════════════════
+     FOOTER
+     ══════════════════════════════════════════════════════ -->
+<footer id="app-footer">
+  <p>
+    QX OTC Signal Bot v2.0 &nbsp;·&nbsp;
+    Real data: Yahoo Finance + Binance &nbsp;·&nbsp;
+    Signals = NEXT candle prediction &nbsp;·&nbsp;
+    <a href="https://github.com/Rafid31/qx-otc-signal-bot" target="_blank" rel="noopener noreferrer">GitHub</a>
+    &nbsp;·&nbsp;
+    <a href="https://qxbroker.com/en/trade" target="_blank" rel="noopener noreferrer">QX Broker</a>
+  </p>
+  <p style="margin-top:4px; font-size:0.68rem; color:var(--text-muted);">
+    ⚠️ For educational and informational purposes only. Trading binary options involves risk. Past signals do not guarantee future results.
+  </p>
+</footer>
+
+<!-- ══════════════════════════════════════════════════════
+     SCRIPTS
+     Load engine.js first (signal algorithm), then app.js
+     ══════════════════════════════════════════════════════ -->
 <script src="engine.js"></script>
 <script src="app.js"></script>
+
 </body>
 </html>
