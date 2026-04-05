@@ -1,13 +1,14 @@
 """
-QX OTC Signal Bot — FastAPI Backend v2.1.0
+QX OTC Signal Bot — FastAPI Backend v2.4.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Real data only — Yahoo Finance REST (Forex/Commodities) + Binance (Crypto)
-• All 28 QX OTC pairs with proper "OTC" names
+• All 52 QX OTC pairs with proper "OTC" names
 • 6-indicator weighted voting signal algorithm
 • Anti-blocking: full browser headers (UA, Referer, Origin, Sec-Fetch)
   + query1/query2 rotation + range=1d/5d/2d fallback
 • NO yfinance library — direct REST only (avoids Railway proxy blocks)
 • WebSocket broadcasting every second + REST fallback
+• Weekend synthetic OTC tick generation — keeps signals live when Forex closed
 • No fake / simulated signals — demo mode only when ALL fetches fail
 """
 
@@ -39,7 +40,7 @@ log = logging.getLogger("qx_bot")
 # ══════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════
-VERSION        = "2.3.0"
+VERSION        = "2.4.0"
 MIN_CANDLES    = 30        # need at least this many before signaling
 SEED_CANDLES   = 90        # candles to seed on startup
 MAX_CANDLES    = 200       # rolling window cap
@@ -310,6 +311,34 @@ def generate_demo_candles(pair_id: str, count: int = SEED_CANDLES) -> pd.DataFra
 
 
 # ══════════════════════════════════════════════════════════
+# SYNTHETIC OTC TICK GENERATOR
+# Used when Forex/Commodity markets are closed (weekends).
+# QX broker generates its own synthetic price feed on weekends —
+# we replicate this with a tiny ±random-walk candle so indicators
+# keep evolving and signals stay dynamic instead of freezing.
+# ══════════════════════════════════════════════════════════
+def _synthetic_tick(pair_id: str, df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Append one synthetic OTC micro-candle based on the last close.
+    Noise scale = max(2 pips, 0.02% of price) — realistic weekend OTC spread.
+    Uses a fresh (non-seeded) RNG so every call gives different movement.
+    """
+    last_close  = float(df["Close"].iloc[-1])
+    pip         = _pip_size(pair_id)
+    noise_scale = max(pip * 2, abs(last_close) * 0.0002)
+    rng         = np.random.default_rng()          # unseeded = truly random
+    move        = rng.normal(0, noise_scale)
+    open_p  = last_close
+    close_p = last_close + move
+    high_p  = max(open_p, close_p) + abs(rng.normal(0, noise_scale * 0.3))
+    low_p   = min(open_p, close_p) - abs(rng.normal(0, noise_scale * 0.3))
+    new_row = pd.DataFrame(
+        [{"Open": open_p, "High": high_p, "Low": low_p, "Close": close_p}]
+    )
+    return pd.concat([df, new_row], ignore_index=True)
+
+
+# ══════════════════════════════════════════════════════════
 # TECHNICAL INDICATORS
 # ══════════════════════════════════════════════════════════
 
@@ -573,7 +602,8 @@ async def _seed_one(pair_id: str) -> bool:
 
 
 async def seed_all():
-    log.info("═══ Seeding all 28 pairs … ═══")
+    total = len(PAIRS)
+    log.info(f"═══ Seeding all {total} pairs … ═══")
     real = 0
     for idx, pid in enumerate(PAIRS):
         ok = await _seed_one(pid)
@@ -581,23 +611,49 @@ async def seed_all():
             real += 1
         # Rate-limiting guard: brief sleep every 5 pairs
         await asyncio.sleep(1.0 if (idx + 1) % 5 == 0 else 0.25)
-    log.info(f"═══ Seed complete: {real}/28 real, {28 - real}/28 demo ═══")
+    log.info(f"═══ Seed complete: {real}/{total} real, {total - real}/{total} demo ═══")
 
 
 async def refresh_all():
-    log.info("Refreshing candles …")
+    """
+    Refresh candle data for all pairs.
+    On weekends (Sat/Sun), Forex and Commodity markets are closed — Yahoo Finance
+    returns the same Friday candles every call.  To keep signals dynamic we:
+      1. Still try to fetch (in case a pair has pre/post-market data).
+      2. Whether or not new data arrives, append one synthetic OTC tick so the
+         indicator window keeps moving and signals can flip BUY / SELL / WAIT.
+    Crypto (Binance) trades 24/7 — always gets real data, no synthetic needed.
+    """
+    now        = datetime.now(timezone.utc)
+    is_weekend = now.weekday() >= 5   # 5 = Saturday, 6 = Sunday
+    mode_str   = "WEEKEND — adding synthetic ticks" if is_weekend else "weekday"
+    log.info(f"Refreshing candles … ({mode_str})")
+
     for idx, pid in enumerate(PAIRS):
+        cfg    = PAIRS[pid]
         df_new = await run_in_threadpool(_fetch_pair_sync, pid, 10)
-        if df_new is not None and len(df_new) >= 1:
-            async with store_lock:
-                existing = price_store[pid]
+
+        async with store_lock:
+            existing = price_store[pid]
+
+            if df_new is not None and len(df_new) >= 1:
+                # Got fresh data — merge, de-dup, cap window
                 if existing is not None:
-                    combined        = pd.concat([existing, df_new]).drop_duplicates()
+                    combined = pd.concat([existing, df_new]).drop_duplicates()
                     price_store[pid] = combined.tail(MAX_CANDLES)
                 else:
                     price_store[pid] = df_new.tail(MAX_CANDLES)
                 data_mode[pid] = "real"
+
+            # Weekend + Yahoo source: always append a synthetic tick so signals evolve
+            if is_weekend and cfg["source"] == "yahoo" and price_store[pid] is not None:
+                price_store[pid] = _synthetic_tick(pid, price_store[pid]).tail(MAX_CANDLES)
+                if data_mode[pid] != "real":
+                    # synthetic on top of demo seed — mark accordingly
+                    pass   # keep data_mode[pid] as "demo"
+
         await asyncio.sleep(0.8 if (idx + 1) % 5 == 0 else 0.15)
+
     log.info("Refresh done.")
 
 

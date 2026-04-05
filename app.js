@@ -1,5 +1,5 @@
 /**
- * QX OTC Signal Bot — Frontend App v2.0.0
+ * QX OTC Signal Bot — Frontend App v2.4.0
  * ==========================================
  * - WebSocket connection with auto-reconnect every 3s
  * - REST /api/signals fallback
@@ -259,13 +259,75 @@ function updateHeader() {
   if (STATE.serverTime) DOM.serverTimeEl.textContent = formatTime(STATE.serverTime);
 }
 
+// ── Audio beep (Web Audio API) ────────────────────────────
+let _audioCtx = null;
+function _getAudioCtx() {
+  if (!_audioCtx) {
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(_) {}
+  }
+  return _audioCtx;
+}
+
+/**
+ * Play a short alert beep.
+ * freq1 = 880 Hz (high), freq2 = 660 Hz (mid-low) — two-tone alert sound.
+ */
+function playAlertBeep() {
+  const ctx = _getAudioCtx();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    [[880, 0, 0.08], [660, 0.09, 0.08]].forEach(([freq, start, dur]) => {
+      const osc  = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type      = 'sine';
+      osc.frequency.setValueAtTime(freq, now + start);
+      gain.gain.setValueAtTime(0.25, now + start);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + start + dur);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + start);
+      osc.stop(now  + start + dur + 0.01);
+    });
+  } catch(_) {}
+}
+
+// Track previous countdown so we fire the beep exactly once on 6→5 transition
+let _prevCountdown = 60;
+
 function updateCountdown(secs) {
+  const prev = _prevCountdown;
+  _prevCountdown = secs;
   STATE.countdown = secs;
+
   const pct = (secs / 60) * 100;
   DOM.countdownBar.style.width  = pct + '%';
   DOM.countdownText.textContent = `Next candle in ${secs}s`;
-  // Colour shift: green when far, amber when close
-  DOM.countdownBar.className = 'countdown-fill' + (secs <= 10 ? ' urgent' : secs <= 20 ? ' warning' : '');
+
+  // Colour shift: green → amber → red
+  DOM.countdownBar.className = 'countdown-fill'
+    + (secs <= 5  ? ' alert5'
+    :  secs <= 10 ? ' urgent'
+    :  secs <= 20 ? ' warning' : '');
+
+  // ── 5-second pre-candle alert ─────────────────────────
+  const entering5s = (prev > 5 && secs <= 5);
+  const in5s       = secs <= 5;
+
+  document.querySelectorAll('.signal-card').forEach(card => {
+    const isBuyOrSell = card.classList.contains('buy') || card.classList.contains('sell');
+    if (in5s && isBuyOrSell) {
+      card.classList.add('alert-5s');
+    } else {
+      card.classList.remove('alert-5s');
+    }
+  });
+
+  // Fire beep once when crossing from 6 → 5
+  if (entering5s) {
+    const hasActiveSignal = document.querySelector('.signal-card.buy.alert-5s, .signal-card.sell.alert-5s');
+    if (hasActiveSignal) playAlertBeep();
+  }
 }
 
 function updateClock() {

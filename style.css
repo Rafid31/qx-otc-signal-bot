@@ -265,6 +265,7 @@ body {
 }
 .countdown-fill.warning { background: #f59e0b; }
 .countdown-fill.urgent  { background: var(--sell); }
+.countdown-fill.alert5  { background: #ff2d2d; }
 
 .countdown-label-row {
   display: flex; justify-content: space-between;
@@ -388,6 +389,24 @@ body {
 .signal-card.wait { border-left: 3px solid var(--wait); }
 .signal-card.buy:hover  { box-shadow: -4px 0 16px var(--buy-glow); }
 .signal-card.sell:hover { box-shadow: -4px 0 16px var(--sell-glow); }
+
+/* ── 5-second pre-candle alert pulse ───────────────────── */
+@keyframes pulse-buy {
+  0%, 100% { box-shadow: -4px 0 0 var(--buy), 0 0 0 0 rgba(0,200,150,0); }
+  50%       { box-shadow: -4px 0 0 var(--buy), 0 0 22px 8px rgba(0,200,150,0.55); }
+}
+@keyframes pulse-sell {
+  0%, 100% { box-shadow: -4px 0 0 var(--sell), 0 0 0 0 rgba(232,69,69,0); }
+  50%       { box-shadow: -4px 0 0 var(--sell), 0 0 22px 8px rgba(232,69,69,0.55); }
+}
+.signal-card.buy.alert-5s  {
+  animation: pulse-buy  0.65s ease-in-out infinite;
+  border-left-width: 4px;
+}
+.signal-card.sell.alert-5s {
+  animation: pulse-sell 0.65s ease-in-out infinite;
+  border-left-width: 4px;
+}
 
 /* Card header */
 .card-header {
