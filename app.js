@@ -1,5 +1,5 @@
 /**
- * QX OTC Signal Bot — Frontend App v2.4.0
+ * QX OTC Signal Bot — Frontend App v2.5.0
  * ==========================================
  * - WebSocket connection with auto-reconnect every 3s
  * - REST /api/signals fallback
@@ -370,6 +370,23 @@ function renderCards() {
   });
 }
 
+function buildCandleSVG(direction, bodyPct) {
+  // Draws a small SVG candle (24×48px) coloured green or red.
+  // direction = 'GREEN' | 'RED' | 'NEUTRAL'
+  const isGreen   = direction === 'GREEN';
+  const isRed     = direction === 'RED';
+  const color     = isGreen ? '#00c896' : isRed ? '#e84545' : '#6b7280';
+  const bodyH     = Math.round(12 + (bodyPct / 0.15) * 16);   // 12–28px
+  const bodyY     = isGreen ? (44 - bodyH) : 4;               // green rises, red falls
+  const wickTopY  = isGreen ? bodyY - 6 : 4;
+  const wickBotY  = isGreen ? 44 : bodyY + bodyH + 6;
+
+  return `<svg class="nc-candle" viewBox="0 0 24 56" width="24" height="56" xmlns="http://www.w3.org/2000/svg">
+  <line x1="12" y1="${wickTopY}" x2="12" y2="${wickBotY}" stroke="${color}" stroke-width="2" stroke-linecap="round"/>
+  <rect x="6" y="${bodyY}" width="12" height="${bodyH}" rx="2" fill="${color}" opacity="${isGreen || isRed ? 1 : 0.4}"/>
+</svg>`;
+}
+
 function buildCard(s) {
   const signalClass = s.signal === 'BUY' ? 'buy' : s.signal === 'SELL' ? 'sell' : 'wait';
   const signalIcon  = s.signal === 'BUY' ? '▲' : s.signal === 'SELL' ? '▼' : '◆';
@@ -382,6 +399,17 @@ function buildCard(s) {
   const chgClass    = s.change_pct > 0 ? 'price-up' : s.change_pct < 0 ? 'price-down' : '';
   const chgArrow    = s.change_pct > 0 ? '↑' : s.change_pct < 0 ? '↓' : '';
   const reasons     = (s.reason || '').split(' | ').slice(0, 3);
+
+  // ── Next Candle Prediction ───────────────────────────────
+  const nc       = s.next_candle || {};
+  const ncDir    = nc.direction  || 'NEUTRAL';
+  const ncConf   = nc.confidence || 0;
+  const ncBody   = nc.body_pct   || 0.05;
+  const ncCallPut = nc.call_put  || 'WAIT';
+  const ncClass  = ncDir === 'GREEN' ? 'nc-green' : ncDir === 'RED' ? 'nc-red' : 'nc-neutral';
+  const ncIcon   = ncDir === 'GREEN' ? '▲' : ncDir === 'RED' ? '▼' : '◆';
+  const ncLabel  = ncDir === 'GREEN' ? 'GREEN  — CALL ↑' : ncDir === 'RED' ? 'RED  — PUT ↓' : 'UNCLEAR — WAIT';
+  const ncSVG    = buildCandleSVG(ncDir, ncBody);
 
   return `
 <div class="signal-card ${signalClass}" data-pair="${s.pair_id}">
@@ -415,6 +443,23 @@ function buildCard(s) {
 
   <div class="reasons-list">
     ${reasons.map(r => `<div class="reason-tag">${r}</div>`).join('')}
+  </div>
+
+  <!-- ── NEXT CANDLE PREDICTION ── -->
+  <div class="next-candle-box ${ncClass}">
+    <div class="nc-label-row">
+      <span class="nc-title">NEXT CANDLE</span>
+      <span class="nc-conf">${ncConf}% confidence</span>
+    </div>
+    <div class="nc-body">
+      <div class="nc-candle-wrap">
+        ${ncSVG}
+      </div>
+      <div class="nc-info">
+        <span class="nc-direction ${ncClass}">${ncIcon} ${ncLabel}</span>
+        <span class="nc-callput ${ncClass}">${ncCallPut}</span>
+      </div>
+    </div>
   </div>
 
   <div class="card-footer">

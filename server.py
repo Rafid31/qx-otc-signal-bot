@@ -1,5 +1,5 @@
 """
-QX OTC Signal Bot — FastAPI Backend v2.4.0
+QX OTC Signal Bot — FastAPI Backend v2.5.0
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Real data only — Yahoo Finance REST (Forex/Commodities) + Binance (Crypto)
 • All 52 QX OTC pairs with proper "OTC" names
@@ -40,7 +40,7 @@ log = logging.getLogger("qx_bot")
 # ══════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════
-VERSION        = "2.4.0"
+VERSION        = "2.5.0"
 MIN_CANDLES    = 30        # need at least this many before signaling
 SEED_CANDLES   = 90        # candles to seed on startup
 MAX_CANDLES    = 200       # rolling window cap
@@ -676,6 +676,15 @@ async def build_payload() -> dict:
                 chg   = (curr - prev) / prev * 100 if prev else 0.0
             else:
                 chg = 0.0
+            # ── Next Candle Prediction ─────────────────────
+            # BUY signal  → predict next candle GREEN (price up)
+            # SELL signal → predict next candle RED   (price down)
+            # WAIT        → direction unclear (confidence < 60%)
+            nc_dir  = "GREEN" if sig["signal"] == "BUY" else "RED" if sig["signal"] == "SELL" else "NEUTRAL"
+            nc_conf = sig["confidence"]
+            # Estimated body size as % of price (scales with confidence)
+            nc_body = round(0.03 + (nc_conf / 100) * 0.12, 4)   # 0.03% – 0.15%
+
             items.append({
                 "pair_id":    pid,
                 "pair_name":  cfg["name"],
@@ -693,6 +702,12 @@ async def build_payload() -> dict:
                 "countdown":  countdown,
                 "indicators": sig.get("indicators", {}),
                 "ts":         now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "next_candle": {
+                    "direction":   nc_dir,
+                    "confidence":  nc_conf,
+                    "body_pct":    nc_body,
+                    "call_put":    "CALL" if nc_dir == "GREEN" else "PUT" if nc_dir == "RED" else "WAIT",
+                },
             })
 
     real_cnt = sum(1 for it in items if it["data_source"] == "real")

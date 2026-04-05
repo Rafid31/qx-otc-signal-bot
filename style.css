@@ -509,6 +509,66 @@ body {
 .candles-info      { font-size: 0.68rem; color: var(--text-muted); font-family: var(--font-mono); }
 
 /* ═══════════════════════════════════════════════════════════
+   NEXT CANDLE PREDICTION BOX
+   ═══════════════════════════════════════════════════════════ */
+.next-candle-box {
+  margin: 8px 0 6px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.03);
+}
+.next-candle-box.nc-green {
+  border-color: rgba(0,200,150,0.35);
+  background: rgba(0,200,150,0.05);
+}
+.next-candle-box.nc-red {
+  border-color: rgba(232,69,69,0.35);
+  background: rgba(232,69,69,0.05);
+}
+.next-candle-box.nc-neutral {
+  border-color: var(--border);
+  background: rgba(255,255,255,0.02);
+}
+.nc-label-row {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+.nc-title {
+  font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--text-muted); text-transform: uppercase;
+}
+.nc-conf {
+  font-size: 0.65rem; color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.nc-body {
+  display: flex; align-items: center; gap: 10px;
+}
+.nc-candle-wrap {
+  flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+  width: 32px;
+}
+.nc-candle { display: block; }
+.nc-info {
+  display: flex; flex-direction: column; gap: 3px;
+}
+.nc-direction {
+  font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
+}
+.nc-direction.nc-green { color: var(--buy); }
+.nc-direction.nc-red   { color: var(--sell); }
+.nc-direction.nc-neutral { color: var(--text-muted); }
+.nc-callput {
+  font-size: 0.78rem; font-weight: 800; letter-spacing: 0.1em;
+  padding: 2px 8px; border-radius: 4px; width: fit-content;
+  display: inline-block;
+}
+.nc-callput.nc-green  { background: rgba(0,200,150,0.15); color: var(--buy); }
+.nc-callput.nc-red    { background: rgba(232,69,69,0.15);  color: var(--sell); }
+.nc-callput.nc-neutral { background: rgba(255,255,255,0.05); color: var(--text-muted); }
+
+/* ═══════════════════════════════════════════════════════════
    SIGNAL HISTORY TABLE
    ═══════════════════════════════════════════════════════════ */
 #history-section {
