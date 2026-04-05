@@ -370,7 +370,7 @@ function renderCards() {
   });
 }
 
-function buildCandleSVG(direction, bodyPct) {
+window.buildCandleSVG = function buildCandleSVG(direction, bodyPct) {
   // Draws a small SVG candle (24×48px) coloured green or red.
   // direction = 'GREEN' | 'RED' | 'NEUTRAL'
   const isGreen   = direction === 'GREEN';
@@ -408,7 +408,8 @@ function buildCard(s) {
   const ncCallPut = nc.call_put  || 'WAIT';
   const ncClass  = ncDir === 'GREEN' ? 'nc-green' : ncDir === 'RED' ? 'nc-red' : 'nc-neutral';
   const ncIcon   = ncDir === 'GREEN' ? '▲' : ncDir === 'RED' ? '▼' : '◆';
-  const ncLabel  = ncDir === 'GREEN' ? 'GREEN  — CALL ↑' : ncDir === 'RED' ? 'RED  — PUT ↓' : 'UNCLEAR — WAIT';
+  const ncLabel  = ncDir === 'GREEN' ? 'GREEN (Bullish)' : ncDir === 'RED' ? 'RED (Bearish)' : 'NEUTRAL';
+  const ncBadge  = ncDir === 'GREEN' ? 'CALL ↑' : ncDir === 'RED' ? 'PUT ↓' : 'WAIT';
   const ncSVG    = buildCandleSVG(ncDir, ncBody);
 
   return `
@@ -457,7 +458,7 @@ function buildCard(s) {
       </div>
       <div class="nc-info">
         <span class="nc-direction ${ncClass}">${ncIcon} ${ncLabel}</span>
-        <span class="nc-callput ${ncClass}">${ncCallPut}</span>
+        <span class="nc-callput ${ncClass}">${ncBadge}</span>
       </div>
     </div>
   </div>
