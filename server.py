@@ -39,7 +39,7 @@ log = logging.getLogger("qx_bot")
 # ══════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════
-VERSION        = "2.2.0"
+VERSION        = "2.3.0"
 MIN_CANDLES    = 30        # need at least this many before signaling
 SEED_CANDLES   = 90        # candles to seed on startup
 MAX_CANDLES    = 200       # rolling window cap
@@ -75,14 +75,39 @@ PAIRS: Dict[str, dict] = {
     "EURCAD_otc": {"name": "EUR/CAD OTC",  "symbol": "EURCAD=X",  "source": "yahoo",   "category": "Forex",     "payout": 83},
     "NZDUSD_otc": {"name": "NZD/USD OTC",  "symbol": "NZDUSD=X",  "source": "yahoo",   "category": "Forex",     "payout": 86},
     "GBPCHF_otc": {"name": "GBP/CHF OTC",  "symbol": "GBPCHF=X",  "source": "yahoo",   "category": "Forex",     "payout": 84},
+    # ── FOREX OTC — additional pairs found on QX ─────────
+    "AUDJPY_otc": {"name": "AUD/JPY OTC",  "symbol": "AUDJPY=X",  "source": "yahoo",   "category": "Forex",     "payout": 77},
+    "AUDNZD_otc": {"name": "AUD/NZD OTC",  "symbol": "AUDNZD=X",  "source": "yahoo",   "category": "Forex",     "payout": 55},
+    "CADCHF_otc": {"name": "CAD/CHF OTC",  "symbol": "CADCHF=X",  "source": "yahoo",   "category": "Forex",     "payout": 88},
+    "EURNZD_otc": {"name": "EUR/NZD OTC",  "symbol": "EURNZD=X",  "source": "yahoo",   "category": "Forex",     "payout": 57},
+    "EURSGD_otc": {"name": "EUR/SGD OTC",  "symbol": "EURSGD=X",  "source": "yahoo",   "category": "Forex",     "payout": 83},
+    "GBPNZD_otc": {"name": "GBP/NZD OTC",  "symbol": "GBPNZD=X",  "source": "yahoo",   "category": "Forex",     "payout": 51},
+    "NZDJPY_otc": {"name": "NZD/JPY OTC",  "symbol": "NZDJPY=X",  "source": "yahoo",   "category": "Forex",     "payout": 77},
+    "USDMXN_otc": {"name": "USD/MXN OTC",  "symbol": "MXN=X",     "source": "yahoo",   "category": "Forex",     "payout": 84},
+    "USDBRL_otc": {"name": "USD/BRL OTC",  "symbol": "BRL=X",     "source": "yahoo",   "category": "Forex",     "payout": 91},
+    "USDZAR_otc": {"name": "USD/ZAR OTC",  "symbol": "ZAR=X",     "source": "yahoo",   "category": "Forex",     "payout": 86},
+    "USDINR_otc": {"name": "USD/INR OTC",  "symbol": "INR=X",     "source": "yahoo",   "category": "Forex",     "payout": 74},
+    "USDIDR_otc": {"name": "USD/IDR OTC",  "symbol": "IDR=X",     "source": "yahoo",   "category": "Forex",     "payout": 77},
+    "USDPHP_otc": {"name": "USD/PHP OTC",  "symbol": "PHP=X",     "source": "yahoo",   "category": "Forex",     "payout": 81},
+    "USDARS_otc": {"name": "USD/ARS OTC",  "symbol": "ARS=X",     "source": "yahoo",   "category": "Forex",     "payout": 77},
+    "USDCOP_otc": {"name": "USD/COP OTC",  "symbol": "COP=X",     "source": "yahoo",   "category": "Forex",     "payout": 78},
+    "USDPKR_otc": {"name": "USD/PKR OTC",  "symbol": "PKR=X",     "source": "yahoo",   "category": "Forex",     "payout": 77},
+    "USDNGN_otc": {"name": "USD/NGN OTC",  "symbol": "NGN=X",     "source": "yahoo",   "category": "Forex",     "payout": 77},
+    "USDBDT_otc": {"name": "USD/BDT OTC",  "symbol": "BDT=X",     "source": "yahoo",   "category": "Forex",     "payout": 92},
+    "USDDZD_otc": {"name": "USD/DZD OTC",  "symbol": "DZD=X",     "source": "yahoo",   "category": "Forex",     "payout": 77},
+    "USDEGP_otc": {"name": "USD/EGP OTC",  "symbol": "EGP=X",     "source": "yahoo",   "category": "Forex",     "payout": 77},
     # ── COMMODITIES OTC (4 pairs) ─────────────────────────
     "XAUUSD_otc": {"name": "Gold OTC",      "symbol": "GC=F",      "source": "yahoo",   "category": "Commodity", "payout": 87},
     "XAGUSD_otc": {"name": "Silver OTC",    "symbol": "SI=F",      "source": "yahoo",   "category": "Commodity", "payout": 93},
     "UKOIL_otc":  {"name": "UK Brent OTC",  "symbol": "BZ=F",      "source": "yahoo",   "category": "Commodity", "payout": 93},
     "USOIL_otc":  {"name": "US Crude OTC",  "symbol": "CL=F",      "source": "yahoo",   "category": "Commodity", "payout": 84},
-    # ── CRYPTO OTC — Binance only (2 pairs) ──────────────
-    "BTCUSD_otc": {"name": "Bitcoin OTC",   "symbol": "BTCUSDT",   "source": "binance", "category": "Crypto",    "payout": 80},
-    "ETHUSD_otc": {"name": "Ethereum OTC",  "symbol": "ETHUSDT",   "source": "binance", "category": "Crypto",    "payout": 66},
+    # ── CRYPTO OTC — Binance (6 pairs) ───────────────────
+    "BTCUSD_otc": {"name": "Bitcoin OTC",       "symbol": "BTCUSDT",  "source": "binance", "category": "Crypto",    "payout": 80},
+    "ETHUSD_otc": {"name": "Ethereum OTC",      "symbol": "ETHUSDT",  "source": "binance", "category": "Crypto",    "payout": 66},
+    "SOLUSD_otc": {"name": "Solana OTC",        "symbol": "SOLUSDT",  "source": "binance", "category": "Crypto",    "payout": 80},
+    "BNBUSD_otc": {"name": "Binance Coin OTC",  "symbol": "BNBUSDT",  "source": "binance", "category": "Crypto",    "payout": 80},
+    "LTCUSD_otc": {"name": "Litecoin OTC",      "symbol": "LTCUSDT",  "source": "binance", "category": "Crypto",    "payout": 80},
+    "BCHUSD_otc": {"name": "Bitcoin Cash OTC",  "symbol": "BCHUSDT",  "source": "binance", "category": "Crypto",    "payout": 80},
 }
 
 # ══════════════════════════════════════════════════════════

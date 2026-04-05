@@ -392,10 +392,10 @@ function renderHistory() {
 // ══════════════════════════════════════════════════════════
 function initTabs() {
   const tabs = [
-    { id:'All',       label:'All',       count: 28 },
-    { id:'Forex',     label:'Forex',     count: 22 },
+    { id:'All',       label:'All',       count: 52 },
+    { id:'Forex',     label:'Forex',     count: 42 },
     { id:'Commodity', label:'Commodity', count:  4 },
-    { id:'Crypto',    label:'Crypto',    count:  2 },
+    { id:'Crypto',    label:'Crypto',    count:  6 },
   ];
   DOM.categoryTabs.innerHTML = tabs.map(t => `
 <button class="tab-btn ${t.id === 'All' ? 'active' : ''}" data-category="${t.id}">
@@ -476,12 +476,14 @@ function startCountdownTick() {
 // ══════════════════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════════════════
+// Hard-coded Railway backend — auto-connects on every load, no modal needed
+const RAILWAY_URL = 'https://qx-otc-signal-bot-production.up.railway.app';
+
 document.addEventListener('DOMContentLoaded', () => {
   cacheDOM();
   initTabs();
   initFilterButtons();
   startCountdownTick();
-  showModal();
 
   DOM.connectBtn.addEventListener('click', onConnectClick);
   DOM.demoBtn.addEventListener('click',    onDemoClick);
@@ -492,4 +494,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Render empty grid placeholder immediately
   renderCards();
+
+  // Auto-connect to Railway — skip modal entirely
+  STATE.backendUrl = RAILWAY_URL;
+  DOM.backendInput.value = RAILWAY_URL;
+  hideModal();
+  startRealMode(RAILWAY_URL);
 });
