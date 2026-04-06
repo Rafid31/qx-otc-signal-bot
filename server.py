@@ -1,5 +1,5 @@
 """
-QX OTC Signal Bot — FastAPI Backend v2.6.0
+QX OTC Signal Bot — FastAPI Backend v2.6.1
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Real data only — Yahoo Finance REST (Forex/Commodities) + Binance (Crypto)
 • All 52 QX OTC pairs with proper "OTC" names
@@ -41,14 +41,18 @@ log = logging.getLogger("qx_bot")
 # ══════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════
-VERSION        = "2.6.0"
+VERSION        = "2.6.1"
 MIN_CANDLES    = 30        # need at least this many before signaling
-SEED_CANDLES   = 90        # candles to seed on startup
-MAX_CANDLES    = 200       # rolling window cap
+SEED_CANDLES   = 200       # candles to seed — 200 min ≈ 3+ hrs of price history
+MAX_CANDLES    = 500       # rolling window cap (larger = richer indicator context)
 REFRESH_SECS   = 60        # data refresh interval
 BROADCAST_SECS = 1         # WS broadcast interval
 TOTAL_WEIGHT   = 14.5      # sum of all indicator weights
-SIGNAL_THRESH  = 60.0      # % vote threshold to fire BUY / SELL
+# 55% threshold (was 60%).
+# Why: after a one-directional session (e.g. USD rally), oversold reversal pairs
+# score RSI+BB+Stoch BUY = 8.5/14.5 = 58.6% — just under 60%, so they showed
+# WAIT instead of BUY, creating an all-SELL bias.  55% captures those signals.
+SIGNAL_THRESH  = 55.0
 
 # ══════════════════════════════════════════════════════════
 # ALL 28 QX OTC PAIRS
@@ -322,7 +326,7 @@ def generate_demo_candles(pair_id: str, count: int = SEED_CANDLES) -> pd.DataFra
 # TECHNICAL INDICATORS
 # ══════════════════════════════════════════════════════════
 
-def _rsi(closes: pd.Series, period: int = 14) -> pd.Series:
+def _rsi(closes: pd.Series, period: int = 7) -> pd.Series:
     """RSI using Wilder's EMA smoothing."""
     delta    = closes.diff()
     gain     = delta.clip(lower=0)
@@ -408,19 +412,22 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
     last_close  = float(closes.iloc[-1])
     candle_cnt  = len(df)
 
-    # ── 1. RSI (14) — weight 3.0 ─────────────────────────
-    rsi_s  = _rsi(closes)
+    # ── 1. RSI-7 — weight 3.0 ────────────────────────────
+    # Period 7 (not 14) — responds to last 7 minutes, much better for 1-min OTC.
+    # Thresholds 35/65 (not 40/60) — avoids triggering on minor noise.
+    rsi_s  = _rsi(closes, period=7)
     rsi    = float(rsi_s.iloc[-1])
     rsi_v  = None
     rsi_lbl = ""
     if not np.isnan(rsi):
-        if rsi <= 40:
+        if rsi <= 35:
             rsi_v, rsi_lbl = "BUY",  f"RSI oversold {rsi:.1f}"
-        elif rsi >= 60:
+        elif rsi >= 65:
             rsi_v, rsi_lbl = "SELL", f"RSI overbought {rsi:.1f}"
 
-    # ── 2. Bollinger Bands (20,2) — weight 3.0 ───────────
-    bb_up, _bb_mid, bb_lo = _bollinger(closes)
+    # ── 2. Bollinger Bands (14,2) — weight 3.0 ───────────
+    # Period 14 (was 20) — tighter band, faster reaction on 1-min chart.
+    bb_up, _bb_mid, bb_lo = _bollinger(closes, period=14)
     bb_u   = float(bb_up.iloc[-1])
     bb_l   = float(bb_lo.iloc[-1])
     bb_v   = None
@@ -429,13 +436,14 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
         bb_range = bb_u - bb_l
         if bb_range > 0:
             bb_pos = (last_close - bb_l) / bb_range   # 0 = at lower, 1 = at upper
-            if bb_pos <= 0.25:
+            if bb_pos <= 0.20:
                 bb_v, bb_lbl = "BUY",  f"BB lower zone {bb_pos*100:.0f}%"
-            elif bb_pos >= 0.75:
+            elif bb_pos >= 0.80:
                 bb_v, bb_lbl = "SELL", f"BB upper zone {bb_pos*100:.0f}%"
 
-    # ── 3. Stochastic (14,3) — weight 2.5 ────────────────
-    k_s, d_s = _stochastic(df)
+    # ── 3. Stochastic (5,3) — weight 2.5 ─────────────────
+    # Period 5 (was 14) — very fast %K, ideal for 1-min OTC candle timing.
+    k_s, d_s = _stochastic(df, k_period=5, d_period=3)
     k_v  = float(k_s.iloc[-1])
     d_v  = float(d_s.iloc[-1])
     st_v = None
@@ -450,8 +458,11 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
     rev_v   = _reversal_pattern(df)
     rev_lbl = "3-candle reversal" if rev_v else ""
 
-    # ── 5. MACD (12,26,9) — weight 2.0 ───────────────────
-    _ml, _sl, hist = _macd(closes)
+    # ── 5. MACD Fast (5,13,4) — weight 2.0 ───────────────
+    # Fast MACD (was 12,26,9): on 1-min charts, 26-period MACD lags ~26 minutes
+    # and reflects hourly trends, not the next candle.  5,13,4 is far more
+    # relevant for short-term OTC signal generation.
+    _ml, _sl, hist = _macd(closes, fast=5, slow=13, signal=4)
     h_curr = float(hist.iloc[-1])
     h_prev = float(hist.iloc[-2]) if len(hist) > 1 else 0.0
     mac_v  = None
@@ -461,21 +472,24 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
             mac_v, mac_lbl = "BUY",  "MACD crossed up"
         elif h_curr < 0 and h_prev >= 0:
             mac_v, mac_lbl = "SELL", "MACD crossed down"
-        elif h_curr > 0:
-            mac_v, mac_lbl = "BUY",  f"MACD bull hist"
-        elif h_curr < 0:
-            mac_v, mac_lbl = "SELL", f"MACD bear hist"
+        elif h_curr > h_prev and h_curr > 0:
+            mac_v, mac_lbl = "BUY",  "MACD rising bull"
+        elif h_curr < h_prev and h_curr < 0:
+            mac_v, mac_lbl = "SELL", "MACD falling bear"
 
-    # ── 6. EMA Cross (9/21) — weight 1.5 ─────────────────
-    ema9  = float(_ema(closes,  9).iloc[-1])
-    ema21 = float(_ema(closes, 21).iloc[-1])
+    # ── 6. EMA Cross (3/8) — weight 1.5 ──────────────────
+    # Period 3/8 (was 9/21): on a 1-min chart EMA(9) lags 9 minutes and EMA(21)
+    # lags 21 minutes — both reflect the past session, not the next candle.
+    # EMA(3)/EMA(8) cross responds within 3–8 minutes, much more actionable.
+    ema3 = float(_ema(closes, 3).iloc[-1])
+    ema8 = float(_ema(closes, 8).iloc[-1])
     ema_v = None
     ema_lbl = ""
-    if not (np.isnan(ema9) or np.isnan(ema21)):
-        if ema9 > ema21:
-            ema_v, ema_lbl = "BUY",  "EMA9 > EMA21"
-        elif ema9 < ema21:
-            ema_v, ema_lbl = "SELL", "EMA9 < EMA21"
+    if not (np.isnan(ema3) or np.isnan(ema8)):
+        if ema3 > ema8:
+            ema_v, ema_lbl = "BUY",  "EMA3 > EMA8 (bullish)"
+        elif ema3 < ema8:
+            ema_v, ema_lbl = "SELL", "EMA3 < EMA8 (bearish)"
 
     # ── Weighted vote ─────────────────────────────────────
     votes = [
@@ -617,10 +631,14 @@ async def refresh_all():
 
             if df_new is not None and len(df_new) >= 1:
                 if existing is not None and len(existing) >= MIN_CANDLES:
-                    # Merge: append new rows, drop exact OHLC duplicates, cap window
+                    # Merge: append new rows, deduplicate on INDEX (timestamp),
+                    # NOT on OHLC values — many consecutive 1-min candles in quiet
+                    # forex sessions have identical prices and would be wrongly dropped.
                     combined = pd.concat([existing, df_new])
-                    # Drop duplicates based on Close price (works even after index reset)
-                    combined = combined.drop_duplicates(subset=["Open","High","Low","Close"])
+                    if not combined.index.is_integer():
+                        # DatetimeIndex: safe to deduplicate on index (timestamp)
+                        combined = combined[~combined.index.duplicated(keep="last")]
+                    # else: integer index (reset) — keep all rows, no dedup needed
                     price_store[pid] = combined.tail(MAX_CANDLES)
                 else:
                     # Pair was empty / under-seeded — use fresh fetch as base
