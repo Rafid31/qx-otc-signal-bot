@@ -1,5 +1,5 @@
 """
-QX OTC Signal Bot — FastAPI Backend v2.6.1
+QX OTC Signal Bot — FastAPI Backend v2.6.2
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 • Real data only — Yahoo Finance REST (Forex/Commodities) + Binance (Crypto)
 • All 52 QX OTC pairs with proper "OTC" names
@@ -41,7 +41,7 @@ log = logging.getLogger("qx_bot")
 # ══════════════════════════════════════════════════════════
 # CONSTANTS
 # ══════════════════════════════════════════════════════════
-VERSION        = "2.6.1"
+VERSION        = "2.6.2"
 MIN_CANDLES    = 30        # need at least this many before signaling
 SEED_CANDLES   = 200       # candles to seed — 200 min ≈ 3+ hrs of price history
 MAX_CANDLES    = 500       # rolling window cap (larger = richer indicator context)
@@ -532,8 +532,8 @@ def generate_signal(pair_id: str, df: Optional[pd.DataFrame]) -> dict:
             "stoch_k":   round(k_v,   2) if not np.isnan(k_v)   else None,
             "stoch_d":   round(d_v,   2) if not np.isnan(d_v)   else None,
             "macd_hist": round(h_curr, 8) if not np.isnan(h_curr) else None,
-            "ema9":      round(ema9,  6) if not np.isnan(ema9)  else None,
-            "ema21":     round(ema21, 6) if not np.isnan(ema21) else None,
+            "ema3":      round(ema3,  6) if not np.isnan(ema3)  else None,
+            "ema8":      round(ema8,  6) if not np.isnan(ema8)  else None,
         },
     }
 
